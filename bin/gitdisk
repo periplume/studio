@@ -1,0 +1,645 @@
+#!/usr/bin/env bash
+# file: gitdisk
+# source: https://github.com/periplume/dotfiles.git
+# author: jason@bloom.us
+
+# TO MY FUTURE SELF
+# WHOSE MEMORY WILL STRUGGLE TO REMEMBER HOW THIS THING WORKS
+# TOC MORE OR LESS:
+# SCRIPT AND SHELL SETTINGS
+# ENVIRONMENT SETTINGS
+# DEFAULTS
+# BASIC LOGGING FUNCTIONS
+# HELPER FUNCTIONS
+# PARAMETER PROCESSING FUNCTIONS
+# SUBCOMMAND FUNCTIONS AND SUBFUNCTIONS
+# MAIN ENTRY AND CONTROL
+
+# SCRIPT AND SHELL SETTINGS
+
+# bash makin-it-hard settings
+set -o errexit        # abort on nonzero exitstatus
+set -o nounset        # abort on unbound variable
+set -o pipefail       # don't hide errors within pipes
+
+# ENVIRONMENT SETTINGS
+
+# debugging and logging settings
+# script debug toggle (set to true to enable default global debugging)
+_DEBUG=false
+# silent mode for scripting (supresses stdout/stderr)
+_SILENT=false
+# logging facility (debug always goes here, unless)
+_LOG=true
+
+# some color
+red=$(tput setaf 1)
+boldred=$(tput bold; tput setaf 1)
+green=$(tput setaf 2)
+cyan=$(tput setaf 6)
+yellow=$(tput setaf 3)
+reset=$(tput sgr0)
+
+# DEFAULT SETTINGS
+
+# minimum git version required
+_minGitVersion=2.28
+# use "main" as the initial and main branch instead of deprecated indelicate "master"
+_initialBranch="main"
+# set the maximum length of a gitdisk (directory) name
+_maxChar=25
+# set the min length of a gitdisk (directory) name
+_minChar=2
+
+# store gitdisk state and logs in $HOME/.gitdisk
+_gitdiskConfig=.gitdisk
+_dotGitdisk="$(dirname ~/.)/${_gitdiskConfig}"
+_logFile="${_dotGitdisk}/logs/gitdisk.log"
+
+# LOGGING 
+self=$(basename $0)
+
+_log() {
+	# levels
+	# 0=debug eg: _log 0 "func(): value x was found and changed into x2"
+	# 1=info eg: _log 1 "main(): set parameters to x y and z"
+	# 2=warn eg: _log 2 "func(): doing y because the force flag was set"
+	# 3=error eg: _log 3 "main(): error, will continue trying"
+	# 4=fatal eg: _log 4 "main(): fatal error, quitting"
+	# ARG1 = log level (can be overridden by setting _logLevelOverride)
+	# prints 1-3 no matter what, unless _LOG is false and/or _SILENT is true
+	# set to 0 to force all logs into DEBUG pipe
+	local _logLevelOverride=
+	local _logLevel=${_logLevelOverride:-$1}
+	local _logMessage="${@:2}"
+	local _canLog=false
+	# set timestamp for log message (unix seconds)
+	local _timeStamp
+	_timeStamp=$(date +%s)
+	# define log levels and colors
+	declare -A _i=([0]=DEBUG [1]=INFO [2]=WARN [3]=ERROR [4]=FATAL)
+	declare -A _c=([0]=cyan [1]=green [2]=yellow [3]=red [4]=boldred)
+	local _level=${_i[${_logLevel}]}
+	local _color=${_c[${_logLevel}]}
+	# TODO define the log colors accordingly and shorten the below 
+	# check if a logfile exists
+	[ -f "${_logFile}" ] && _canLog=true
+	# if debug is false and message level is 0, stop
+	[  ${_DEBUG} = false ] && [ ${_logLevel} = 0 ] && return
+	# if _LOG is true and _logFile exists, print to log
+	[ ${_LOG} = true ] && [ ${_canLog} = true ] && \
+		 printf "%s\n" "${_timeStamp} ${_level}: ${_logMessage}" >> "${_logFile}"
+	# if silent is true, don't print anything to the console and stop
+	[ ${_SILENT} = true ] && return
+	# if _SILENT is false, prettyPrint to console based on level
+	if [ ! ${_SILENT} = true ]; then
+		[ ${_DEBUG} = true ] && [ ${_logLevel} = 0 ]  && \
+			echo "${cyan}DEBUG${reset}: $self ${_logMessage}" && return
+		[ ${_logLevel} = 1 ] && \
+			echo "${green}INFO${reset}: $self ${_logMessage}" && return
+		[ ${_logLevel} = 2 ] && \
+			echo "${yellow}WARN${reset}: $self ${_logMessage}" && return
+		[ ${_logLevel} = 3 ] && \
+			echo "${red}ERROR${reset}: $self ${_logMessage}" && return
+		[ ${_logLevel} = 4 ] && \
+			echo "${boldred}FATAL${reset}: $self ${_logMessage}" && exit 1
+	fi
+}
+
+# HELPER FUNCTIONS
+
+_isGitReady() {
+	# check that our version of git supports this script
+	local _minGitMajor=$(echo "${_minGitVersion}" | cut -f1 -d.)
+	local _minGitMinor=$(echo "${_minGitVersion}" | cut -f2 -d.)
+	if ! hash git 2>/dev/null; then
+		_log 4 "${FUNCNAME[0]}: git not found; git >= ${_minGitVersion} required.  Quitting."
+	else
+		_gitVersion=$(git --version | cut -d' ' -f3)
+		_log 0 "${FUNCNAME[0]}: git version is ${_gitVersion}"
+		_gitMajor=$(echo "${_gitVersion}" | cut -d. -f1)
+		_gitMinor=$(echo "${_gitVersion}" | cut -d. -f2)
+		if [ "${_gitMajor}" -ge "${_minGitMajor}" ] && [ "${_gitMinor}" -ge "${_minGitMinor}" ]; then
+			_log 0  "${FUNCNAME[0]}: git version ${_gitVersion} is >= ${_minGitVersion}"
+			return 0
+		else
+			_log 3 "${FUNCNAME[0]}: git version ${_gitVersion} is not >= ${_minGitVersion}"
+			_log 4 "${FUNCNAME[0]}: upgrade git to ${_minGitVersion} or later to use gitdisk"
+		fi
+	fi
+}
+
+_printUsage () {
+  cat << EOF
+
+usage: gitdisk [OPTIONS] command [OPTIONS]
+
+options:
+ -h      print this usage info
+ -l      log commands and debug info to log file
+ -d      print debug info to stdout and/or log
+ -s      suppress all stdout/stderr
+ -v      print version number and exit
+
+commands:
+ create              create a local gitdisk
+ mirror              attach a mirror repo
+ import              import a remote gitdisk
+ sync                sync to remote(s)
+ put                 add a new item to gitdisk
+ get                 retrieve an object
+
+for command specific usage, eg:
+$ gitdisk help create 
+
+EOF
+}
+
+_printInfo () {
+  cat << EOF
+
+gitdisk treats a git repo like a disk database.  it is meant
+for a single-user multi-session git repo, whether as a code 
+or document repository.  it is mainly a wrapper for setting
+up git repos and attaching remotes for redundancy.  it is not
+meant for regular users but as a back-end "disk" setup and 
+low-level gitdisk read and write command.  it attempts to dumb
+down git to simple object store semantics, poorly.
+
+EOF
+}
+
+_checkSelf() {
+	# check if already installed
+	# if we are running init and there is no .gitdisk, we can safely return
+	# since the init command will create the .gitdisk control disk
+	if [ "${_subCommand:-}" = "init" ] && [ ! -d "${_dotGitdisk}" ]; then
+		_log 0 "${FUNCNAME[0]}: init called, no .gitdisk detected"
+		return 0
+	# otherwise, check if gitdisk is installed, if not, return 1 
+	# TODO add smarter checks
+	else [ -d "${_dotGitdisk}" ] && return 0 || return 1
+	fi
+}
+
+_isNameValid() {
+	# _isNameValid: check for allowed names
+	# arg = name
+	# return 0 (yes) if valid, 1 (no) if invalid
+	# legal name: max char = 25, min=2
+	#             a-z 0-9 - .
+	#             first and last not - or .
+	#							no double dash or dot
+	#							no dash follows dot and vice versa
+	# AMENDATION: first DOT allowed
+	local _requestedName="${*}"
+	local _strLength=${#_requestedName}
+	_log 0 "_isNameValid(): requestedName=${_requestedName}"
+	_log 0 "_isNameValid(): strLength=${#_requestedName}"
+	# check first char first...must be lowercase or number	
+	if [[ ! ${_requestedName} =~ ^[[:lower:]|[:digit:]]|. ]]; then
+			_log 3 "_isNameValid(): first char must be letter or digit"
+			return 1
+	# check string length
+	elif [ "${_strLength}" -lt ${_minChar} ] || [ "${_strLength}" -gt ${_maxChar} ]; then
+		_log 3 "_isNameValid(): length violation"
+		return 1
+	# check last char...must be lower or number
+	elif [[ ! ${_requestedName} =~ [[:lower:]|[:digit:]]$ ]]; then
+			_log 3 "_isNameValid(): last char must be letter or digit"
+			return 1
+	# check for allowed characters
+	elif [[ ! ${_requestedName} =~ ^([[:lower:]|[:digit:]]|[-.])*$ ]]; then
+			_log 3 "_isNameValid(): only lower, digit, hyphen and period allowed"
+			return 1
+	else
+		# check for other conditions we deem illegal
+		case ${_requestedName} in
+			*--* ) _log 3 "_isNameValid(): double dash"; return 1 ;;
+			*..* ) _log 3 "_isNameValid(): double dot"; return 1 ;;
+			*.-* ) _log 3 "_isNameValid(): dash follows dot"; return 1 ;;
+			*-.* ) _log 3 "_isNameValid(): dot follows dash"; return 1 ;;
+		esac
+	fi
+}
+
+_setDesiredPath() {
+	# read $1
+	# set _desiredPath and _desiredName and _desiredBase
+	if [ -z "${1}" ]; then
+		_log 3 "_setDesiredPath requires an argument"
+		return 1
+	else
+			local _workDir
+			_workDir="$(pwd)"
+			_log 0 "_setDesiredPath(): workDir=${_workDir}"
+			# figure out the path; full or relative path allowed
+			if [[ "${1}" = /* ]]; then
+				_desiredPath="${1}"
+				_desiredName=$(basename "${1}")
+			elif [[ "${1}" = ..* ]]; then
+        _log 3 "_setDesiredPath(): no path redirects"; exit 1
+      elif [[ "${1}" = ./* ]]; then
+        _log 0 "_setDesiredPath(): fix this into relative path, strip 1st 2 chars"; exit 1
+				#TODO fix this in case path is explicitly relative
+      elif [[ "${1}" = . ]]; then
+				_desiredPath="${_workDir}"
+				_desiredName=$(basename "${_workDir}")
+			else
+				_desiredPath="${_workDir}/${1}"
+				_desiredName=${1}
+			fi
+			_desiredBase=$(dirname "${_desiredPath}")
+			_log 0 "_setDesiredPath(): desired path is '${_desiredPath}'"
+			_log 0 "_setDesiredPath(): desired name is '${_desiredName}'"
+			_log 0 "_setDesiredPath(): desired base is '${_desiredBase}'"
+			# TODO make sure to always strip off trailing slash
+	fi
+}
+
+_isPathWritable() {
+	# arg 1 = full path
+	# return 0 (yes) if writable, 1 (no) if not writable
+	if [ -z "${1}" ]; then
+		_log 2 "_isPathWritable(): requires an argument"
+		return 1
+	elif [ ! -w "${1}" ]; then
+		_log 2 "_isPathWritable(): ${1} is not writable"
+		return 1
+	fi	
+}
+
+_isPathEmpty() {
+	# arg 1 = full path
+	# return 0 if empty, return 1 if not empty
+	if [ -z "${1}" ]; then
+		_log 2 "_isPathEmpty requires an argument"
+		return 1
+	elif [ -n "$(ls -A "${1}" 2>/dev/null)" ]; then
+		_log 0 "_isPathEmpty(): ${1} is NOT empty"
+		return 1
+	fi
+}
+
+_isPathNew() {
+	# arg 1 = full path
+	# return 0 if new; return 1 if exists 
+	if [ -z "${1}" ]; then
+		_log 2 "_isPathNew requires an argument"
+		return 1
+	elif [ -d "${1}" ]; then
+		_log 0 "_isPathNew(): ${1} exists"
+		return 1
+	fi
+}
+
+_isPathGitdisk() {
+	# arg 1 = full path
+	# return 0 if gitdisk, return 1 if not
+	if [ -z "${1}" ]; then
+		_log 2 "_isPathGitdisk(): requires an argument"
+		return 1
+	elif [[ ! -d "${1}/.git" ]]; then
+		return 1
+	else
+		_log 0 "_isPathGitdisk(): .git exists in ${1}"
+		# TODO add check for gitdisk marker
+		return 0
+	fi
+}
+
+_getUUID() {
+	# arg 1 = gitdisk name
+	# generates a hash-based uuid based on the name
+	# the implication is on the same host, a user cannot create two gitdisks with
+	# the same name.  i think this makes sense in the big picture i have in mind.
+	local _uuid
+	[ -z "${1}" ] || _log 2 "${FUNCTION}: requires an argument" && return 1
+	_uuid=$(uuidgen -m -N "${1}" -n @url)
+	echo "${_uuid}" || return 1
+}
+
+_createGitdisk() {
+	# arg 1 = full path
+	# return 0 on success, 1 on fail
+	# notice: no name checking here
+	set -x
+	local _uuidMark
+	local _timestampUnix
+	local _bareCreate=${_bareCreate:-false}
+	_uuidMark=$(uuidgen | tr "[:upper:]" "[:lower:]")
+	_timestampUnix=$(date +%s)
+	_log 0 "_createGitdisk(): attempting to create ${1}"
+	local _gitdiskSignature="gitdisk: $USER $HOSTNAME ${_timestampUnix} ${_uuidMark}"
+	if [ -z "${1}" ]; then
+		_log 3 "_createGitdisk(): requires an argument"
+		return 1
+	fi
+	if [ ${_bareCreate} = true ]; then
+		git init --bare -q -b "${_initialBranch}" "${1}" 
+		echo "${_gitdiskSignature}" > "${1}/description"
+		echo "${_uuidMark} ${1} $USER $HOSTNAME ${_timestampUnix}" >> ~/.gitdisk/gitdisk.tab
+	else
+		git init -q -b "${_initialBranch}" "${1}" || _log 3 "_createGitdisk(): create failed: err?: $?" && exit 1
+		echo "${_gitdiskSignature}" > "${1}/.git/description"
+		# this will become a gitdisk.tab file (a la fstab)
+		# fields
+		# uuid path user hostname timestamp
+		# TODO fix the line format to include TYPE
+		# type = local, remote, primary, mirror, backup,... ?
+		echo "${_uuidMark} ${1} $USER $HOSTNAME ${_timestampUnix}" >> ~/.gitdisk/gitdisk.tab
+	fi
+	_log 0 "_createGitdisk(): created ${_uuidMark} at ${1} by $USER on $HOSTNAME"
+}
+
+# PARAMETER PROCESSING FUNCTIONS
+
+_getOpts () {
+	# check for global command flags and set VARS accordingly
+	local OPTIND
+	_log 0 "${FUNCNAME[0]}: positional parameters read: $*"
+	while getopts ":hsdlv" flag ; do
+		_log 0 "${FUNCNAME[0]}: OPTIND=$OPTIND flag=$flag"
+		case ${flag} in 
+			h)
+				_printInfo ; _printUsage; exit 0
+				;;
+ 	    s)
+				_log 0 "${FUNCNAME[0]}: enabling silent mode"
+ 	      _SILENT=true
+				;;
+			d)
+				_DEBUG=true
+				_log 0 "${FUNCNAME[0]}: enabled debug mode"
+				;;
+			l)
+				_LOG=true
+				_log 0 "${FUNCNAME[0]}: enabled log mode"
+				;;
+			v)
+				echo "${green}verion${reset}: beta"; exit 0
+				;;
+			?)
+				echo "${red}ERROR${reset}: invalid global option: -$OPTARG"; exit 1
+				;;
+		esac
+	done
+	shift $((OPTIND - 1))
+	# export a paired down parameter string flags and args read within this
+	# function will be discarded, leaving behind only that which the rest needs
+	export _workingParams=$*
+	_log 0 "${FUNCNAME[0]}: _LOG=${_LOG}"
+	_log 0 "${FUNCNAME[0]}: _SILENT=${_SILENT}"
+	_log 0 "${FUNCNAME[0]}: _DEBUG=${_DEBUG}"
+	return
+}
+
+_getSubcommand() {
+	# look for the first subcommand and set _subCommand accordingly
+	while ((${#})); do
+		_log 0 "${FUNCNAME[0]}: reading parameter '${1}'"
+		case $1 in
+			create)
+				_log 0 "${FUNCNAME[0]}: '$1' called, checking for create flags now"
+				_subCommand=$1
+				_getCreateOpts
+				return
+				;;
+			help)
+				_printInfo ; _printUsage; exit 0
+				;;
+			init)
+				_log 0 "_getSubcommand(): '$1' called, check for init flags"
+				_subCommand=$1
+				return
+				;;
+			mirror)
+				_log 0 "_getSubcommand(): '$1' called, check for mirror flags"
+				_getMirrorOpts
+				_subCommand=$1
+				return
+				;;
+			*)
+				_log 4 "_getSubcommand(): '$1' is not a subcommand"
+				;;
+		esac
+		shift
+	done
+}	
+
+# SUBCOMMAND FUNCTIONS AND SUBFUNCTIONS
+
+_getCreateOpts() {
+	# check for create flags and args
+	local OPTIND=1
+	set -- ${_workingParams}
+	_log 0 "${FUNCNAME[0]}: positional parameters read: $*"
+	shift
+	while getopts ":fbo:" flag "$@" ; do
+		case ${flag} in 
+			f)
+				_forceCreate=true
+				_log 0 "${FUNCNAME[0]}: force mode is enabled"
+				;;
+			b)
+				_bareCreate=true
+				_log 0 "${FUNCNAME}: bare repo is true"
+				;;
+			o)
+				_log 0 "${FUNCNAME[0]}: setting option _createObjectOptions=$OPTARG"
+				_createObjectOptions=$OPTARG
+				# placeholder for arbitrary options that can be passed in
+				;;
+			?)
+				echo "${red}ERROR${reset}: invalid option: -$OPTARG"
+				_log 3 "_getCreateOpts(): unknown flag: -$OPTARG"; exit 1
+				;;
+		esac
+	done
+	shift $((OPTIND - 1))
+	export _workingParams=$*
+}
+
+_create() {
+	local _desiredPath=$_workingParams
+	if [[ -z "${_desiredPath:-}" ]]; then
+		echo "${red}ERROR${reset}: usage: gitdisk create <name>"
+		echo "       <name> must be a full path or relative to PWD"
+		exit 1
+	else _setDesiredPath "${_desiredPath}"
+	fi
+	if _isNameValid "${_desiredName}"; then
+		_log 0 "_create(): '${_desiredName}' is a valid name"
+	else
+		[ -z "${_verbose:-}" ] || echo "${red}ERROR${reset}: invalid name"
+		_log 3 "_create(): '${_desiredName}' is an invalid name"
+		exit 1
+	fi
+	if _isPathNew "${_desiredPath}"; then
+		_log 0 "_create(): '${_desiredPath}' is new"
+		if _isPathWritable "${_desiredBase}"; then
+			_log 0 "_create(): '${_desiredPath}' is writable"
+		else
+			_log 3 "_create(): '${_desiredBase}' is not writable"
+			exit 1
+		fi
+	else
+		if _isPathEmpty "${_desiredPath}"; then
+			_log 0 "_create(): '${_desiredPath}' is empty"
+		else
+			if _isPathGitdisk "${_desiredPath}"; then
+				_signature=$(cat "${_desiredPath}/.git/description")
+				_log 2 "_create(): '${_desiredPath}' is a gitdisk: ${_signature}"
+				echo "${red}ERROR${reset}: could not create due to existing gitdisk"
+				exit 1
+			else
+				_log 2 "_create(): '${_desiredPath}' is not empty and is not a gitdisk"
+				echo "${red}ERROR${reset}: could not create due to non-empty path"
+				exit 1
+			fi
+		fi
+	fi
+	_log 0 "_create(): all conditions passed...creating gitdisk at ${_desiredPath}..."
+	if _createGitdisk "${_desiredPath}"; then
+		_log 1 "_create(): gitdisk created at ${_desiredPath}"
+	else
+		_log 3 "_create(): gitdisk failed to create ${_desiredPath}"
+		exit 1
+	fi
+}
+
+_getMirrorOpts() {
+	local OPTIND=1
+	set -- ${_workingParams}
+	_log 0 "_getMirrorOpts(): positional parameters read: $*"
+	shift
+	while getopts ":il" flag "$@"; do
+		case ${flag} in
+			i)
+				# -i interactive
+				_interactiveMode=true
+				_log 0 "_getMirrorOpts(): interactive mode enabled"
+				;;
+			l)
+				# -l list
+				_mirrorOp=list
+				_log 0 "_getMirrorOpts(): mirror operation 'list' set"
+				;;
+			p)
+				# -p pause [DESTINATION]
+				_mirrorPause=true
+				#TODO get the next parameter and check if destination is registered
+				_log 0 "_getMirrorOpts(): mirror pause enabled for ..."
+				;;
+			?)
+				_log 4 "_getMirrorOpts(): unknown flag for command mirror: -$OPTARG"
+				;;
+		esac
+		done
+		shift $((OPTIND - 1))
+		export _workingParams=$*
+}
+
+# SUB COMMANDS
+# import              import a remote gitdisk
+# sync                sync to remote(s)
+# put                 add a new item to gitdisk
+# mv                  move item within gitdisk
+# rm                  remove item from gitdisk
+# open                open item
+# map                 add namespace mapping
+# mirror              attach a mirror repo
+
+_put() {
+	# put a blob into gitdisk and map in tree
+	echo "to do"
+}
+
+# -d detatch [DESTINATION]
+# -a attach [SOURCE] [DESTINATION]
+# -m mode [sync|async|adapt|manual]
+# -t test [gitdisk]
+# -s status [gitdisk]
+_mirror() {
+	# gitdisk mirror SOURCE DESTINATION
+	local _source
+	local _remote
+	local OPTIND=1
+	set -- ${_workingParams}
+	_log 0 "_mirror(): args: $@"
+	_source="${1}"
+	_remote="${2}"
+	echo "source: $_source"
+	echo "remote: $_remote"
+}
+
+_init() {
+	# set up ~/.gitdisk and gitdisktab
+	local _gitUserName
+	local _gitUserEmail
+	if [ -f "${_dotGitdisk}/.installed" ]; then
+		_log 3 "_init(): gitdisk already installed"
+		echo "${red}FATAL${reset}: gitdisk already installed"
+		exit 1
+	else
+		if [ -f $HOME/.gitconfig ]; then
+			_gitUserName=$(git config user.name)
+			_gitUserEmail=$(git config user.email)A
+			echo "add read to confirm the following:"
+			echo "name: ${_gitUserName}"
+			echo "email: ${_gitUserEmail}"
+		else
+			git config --global init.defaultBranch main
+			git config --global core.filemode false
+			git config --global includeif.gitdir:~/.gitdisk.path ~/.gitdisk/.gitconfig-gitdisk
+			git config --global log.date local
+			git config --global user.name "Jason Lindemuth"
+			git config --global user.email "jason@bloom.us"
+		fi
+		_createGitdisk "${_dotGitdisk}"
+		echo "logs/" >> "${_dotGitdisk}/.gitignore"
+		[ ! -d "${_dotGitdisk}/logs" ] && mkdir "${_dotGitdisk}/logs"
+		touch "${_dotGitdisk}/gitdisk.tab"
+		touch "${_dotGitdisk}/logs/gitdisk.log"
+		touch "${_dotGitdisk}/.installed"
+		_log 1 "_init(): ${_dotGitdisk} created...gitdisk ready to use"
+	fi	
+}
+
+# git help -c # to see all git settings
+# git 
+# for studio/germ/etc we will use includeif to create custom git names
+#git config --global --file ~/.gitdisk/.gitconfig-gitdisk user.name "jason"
+
+_status() {
+	# check and report on the basics
+	# run with either 'gitdisk status' or 'gitdisk'
+	# 1. script version
+	# 2. git version
+	# 3. installed?  (ie has init created .installed file?)
+	# 4. gitdisk count
+	# 5. gitdisk mirrors (put 4 & 5 data in a table like so:)
+	# gitdisk    size    object-count   age    freshness    mirrors    rf
+	_checkSelf || echo "${red}ERROR${reset}: please run 'gitdisk init' first"
+	echo "no"
+	exit 1
+}
+
+# MAIN ENTRY AND CONTROL
+
+main() {
+	# what are we trying to do (read all the positional parameters and set VARS)
+	_getOpts "${@}"
+	_log 0 "${FUNCNAME[0]}: parameters read: ${@}"
+	_log 0 "${FUNCNAME[0]}: paired-down parameters: $_workingParams"
+	_getSubcommand $_workingParams
+	[ -z "${_subCommand:-}" ] && _status
+	_log 0 "${FUNCNAME[0]}: _subCommand: $_subCommand"
+	_log 0 "${FUNCNAME[0]}: remaining args: $_workingParams"
+	# can we do it
+	_isGitReady
+	_checkSelf || _log 4 "please run 'gitdisk init' first"
+	# do it
+	[ -n "${_subCommand:-}" ] && eval _"${_subCommand}"
+}
+main "${@}"

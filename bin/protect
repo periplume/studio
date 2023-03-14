@@ -1,0 +1,212 @@
+#!/bin/bash
+# encrypt contents of ~/studio (my writing studio)
+# then copy to USB drive
+#
+
+#TODO
+# add some checks to ensure that the passphrase entered was correctly typed
+# one typo would render the backup worthless!
+# 
+# add logic to clean up if job fails
+
+# manually set variables
+PORTABLE_USB="/media/jason/KINGSTON"
+STUDIO="$HOME/Documents/studio"
+
+
+# automtically set variables
+#
+# today
+date=$(date +%F)
+# eg "2016-03-21" or %Y-%m-%d
+year=${date:0:4}
+month=${date:5:2}
+day=${date:8:2}
+scriptname=${0##*/}
+backupdir=$STUDIO/backup
+backupcatalog=$backupdir/catalog
+logfile=$backupdir/$scriptname.log
+
+usage ()
+{
+	echo "usage: $scriptname"
+	echo "$scriptname now (to archive, encrypt, and move to USB)"
+	#echo "$scriptname encrypt (to archive and encrypt only)"
+	echo "$scriptname help"
+	exit
+}
+
+envcheck ()
+{
+	# perform tests to validate that everything is in place
+	# return 0 for success
+	# return 1 for failure
+	# check for gpg
+	# check for backup catalog file
+	gpg_fullpath=$(which gpg)
+	if [[ $? -eq 1 ]]
+	then
+		echo "func:${FUNCNAME[0]}: ERROR: gpg not found in path" && return 1
+	else
+		gpg_version=$(gpg --version | head -1 | cut -f3 -d' ')
+		logevent "'$FUNCNAME': gpg version $gpg_version"
+	fi
+	if [[ ! -d "$backupdir" ]]
+	then
+		mkdir "$backupdir" || return 1
+	fi
+	if [[ ! -w "$backupcatalog" ]]
+	then
+		mkdir "$backupcatalog" || return 1
+	fi
+}
+
+
+timestamp ()
+{
+  # no args, return current timestamp string
+  # 'YYYY-MM-DD HH:MM:SS SECONDS-SINCE-1970'
+  date '+%F %T %s'
+}
+
+
+logevent ()
+{
+	# $@: one arg (multi word) the log message
+  # logs event to global logfile
+  echo "[$(timestamp)] $scriptname $@" >> $logfile
+}
+
+
+checkmedia ()
+{
+	# check for removable media ($PORTABLE_USB)
+	# return 0 if available and writable
+	# return 1 if not
+	touchfile=$date.test
+	if [[ -d $PORTABLE_USB ]]
+	then
+		#DEBUG#echo "func:${FUNCNAME[0]}: USB mount exists"
+		touch $PORTABLE_USB/studio/$touchfile > /dev/null 2>&1
+		if [[ $? -eq 0 ]]
+			#DEBUG#echo "func:${FUNCNAME[0]}: touch write.test on media returned $?"
+		then
+			rm $PORTABLE_USB/studio/$touchfile > /dev/null 2>&1
+			#DEBUG#echo "func:${FUNCNAME[0]}: returning 0"
+			return 0
+		else
+			#DEBUG#echo "func:${FUNCNAME[0]}: $PORTABLE_USB not writable: returning 1"
+			return 1
+		fi
+	else
+		#DEBUG#echo "func:${FUNCNAME[0]}: $PORTABLE_USB not available: returning 1"
+		return 1 
+	fi
+}
+
+makeArchive ()
+{
+	# archive all subdirectories
+	# exclude backup and temp
+	# tar up the contents
+	# write to temp location
+	# return the name of the tarfile
+	tarfile="studio.$date.tar"
+	backupfile="backup/$tarfile"
+	if [[ -e $backupfile ]]
+	then
+		echo "ERROR: $backupfile exists"
+		logevent "'$FUNCNAME': failure: $backupfile exists"
+		return 1
+	fi
+	tar -cvpf $backupfile -C $STUDIO --exclude=backup . > $backupcatalog/backup-$date.log 2> $backupcatalog/backup-$date.err
+	size=$(du -h $backupfile | cut -f1)
+	logevent "'$FUNCNAME': success: archived $STUDIO to $tarfile in $size: catalog:backup-$date.log backup-$date.err"
+	echo "$date $tarfile" >> "backup/catalog/catalog.txt"
+	echo "$tarfile"
+}
+
+encryptArchive ()
+{
+	# arg 1 = tarfile
+	# encrypt $1 with symmetric (passphrase)
+	# prompt in terminal for passphrase
+	# return the name of the encrypted file
+	gpg --pinentry-mode=loopback -a -o backup/$1.gpg -c $STUDIO/backup/$1 \
+		&& logevent "'$FUNCNAME': success : $1 encrypted to $1.gpg" || return 1
+	echo $1.gpg
+	return 0
+}
+
+moveEncryptedfile ()
+{
+	# arg1 = gpg encrypted file name
+	cp $STUDIO/backup/$1 $PORTABLE_USB/studio/
+	if [[ $? -eq 0 ]]
+	then
+		rm $STUDIO/backup/$1
+		logevent "'$FUNCNAME': success: copied $1 to $PORTABLE_USB"
+	else
+		logevent "'$FUNCNAME': failure: could not copy $1 to $PORTABLE_USB"
+		return 1
+	fi
+	return 0
+}
+
+# MAIN
+# if no arguments
+if [ "$#" -eq 0 ]
+then
+	usage
+else
+	# if there are arguments, parse them
+	while [ $# -gt 0 ]
+	do
+		case "$1" in
+			now)
+				if [ -z $2 ]
+				then
+					envcheck
+					if [[ $? -eq 1 ]]
+					then
+						echo "ERROR: envcheck failed"
+						exit 1
+					fi
+					checkmedia
+					if [[ $? -eq 1 ]]
+					then
+						echo "ERROR: $PORTABLE_USB is not mounted; check USB device mount"
+						exit 1
+					else
+						echo "INFO: $PORTABLE_USB is mounted and writable"
+					fi
+					clearfile=$(makeArchive)
+					if [[ $? -eq 0 ]]
+					then
+						encryptedfile=$(encryptArchive $clearfile)
+						moveEncryptedfile $encryptedfile
+					else
+						echo "ERROR: makeArchive failed and returned: $clearfile"
+						exit 1
+					fi
+				fi
+				exit
+				;;
+			list)
+				if [ -z $2 ]
+				then
+					echo "usage: journal list [current|all|year|month]"
+				else
+					range=$2
+					list
+				fi
+				exit
+				;;
+			help|*)
+				usage
+				;;
+		esac
+	done
+fi
+exit
+

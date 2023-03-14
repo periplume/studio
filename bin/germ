@@ -1,0 +1,2180 @@
+#!/usr/bin/env bash
+# file: germ
+# source: https://github.com/periplume/dotfiles.git
+# author: jason@bloom.us
+# SCRIPT AND SHELL SETTINGS
+set -o errexit  # set -e
+set -o nounset
+set -o pipefail
+
+###########################
+# PREREQUISITES
+###########################
+ 
+# required commands
+_requiredCommands=(git gitdisk dsink vipe fzf)
+
+# recommended commands
+_recommendedCommands=(git-sizer tig)
+
+###########################
+# ENVIRONMENT SETTINGS
+###########################
+
+# GLOBAL VARIABLES
+# these never change in the context of a session
+# these will be exported (in the case of fzf previews etc) 
+
+# WORKING ENVIRONMENT
+# _studioDirName is the umbrella or master namespace in which germ operates
+_studioDirName=studio
+# germ lives inside studio (into which it is designed to publish)
+_germDirName=germ
+# get the name of the script itself
+self=$(basename $0)
+
+# USER NAME
+# the git username and email are used to create a short hash which identifies
+# the user in the namespace.  it is set as a global variable and used in various
+# places.  it can be overridden here.
+#_user=e291
+
+# BEHAVIOR
+
+# debugging and logging settings
+# script debug toggle (set to true to enable default global debugging)
+_DEBUG=false
+# silent mode for scripting (supresses all output)
+_SILENT=false
+# logging facility
+_LOG=false
+
+# OUTPUT
+
+# some color
+red=$(tput setab 1; tput setaf 7)
+boldred=$(tput setab 1 ; tput setaf 7)
+green=$(tput setaf 2)
+cyan=$(tput setaf 6)
+yellow=$(tput setaf 3)
+reset=$(tput sgr0)
+label=$(tput setab 7; tput setaf 0)
+prompt=$(tput setab 5; tput setaf 7)
+
+################################
+# LOGGING AND CONSOLE MESSAGES
+################################
+
+# user output: types
+# name		description														display
+#----------------------------------------------------------------------------
+# debug		verbose																cyan
+# info		information only											blue text, green bg
+# warn		warning (abnormal)										black text, yellow bg
+# error		not allowed														white text, red bg
+# fatal		error and exiting (out of trap)				black text, red bg, bold text?
+# ask			ask user for input										white text, cyan bg
+#	always expect fresh new line
+# exception...after ask...in which case, take care of that immediately
+# suppress if _SILENT=true
+#
+# call as
+# _warn "message"
+# _info "message"
+
+# _fLOG creates logging functions based on
+# the static features: (global variables)
+#
+# the three main determinants:
+# _SILENT= true | false
+# _LOG= true | false
+# _DEBUG= true | false
+#
+# subordinate dependencies:
+# _canLog= true | false
+# _logFile= "path to file"
+# $(tput colors)
+
+_fLOG() {
+	# collapsing function...sets up according to the static determinants
+	# creates all log functions
+	# _debug
+	# _info
+	# _warn
+	# _error
+	# _ask
+	# log function usage as simple as:
+	# _info "the message contents" 
+	local _log=0
+	local _console=0
+	local _color=0
+	[[ "$_SILENT" = "false" ]] && _console=1
+	[[ "$_LOG" = "true" && "$_canLog" = "true" ]] && _log=1
+	[[ $(tput colors) ]] && _color=1
+	#
+	# set up colors	
+	_cDebug=$(tput setaf 6)
+	_cInfo=$(tput setaf 2)
+	_cWarn=$(tput setaf 11)
+	_cError=$(tput setaf 1)
+	_cAsk=$(tput setaf 0; tput setab 11)
+	_cReset=$(tput sgr0)
+	# create 5 log functions based on static determinants above
+	# TODO use eval, assoc arrays and loops to build these functions with less
+	# code...someday...for now, it works just fine
+	# CONSOLE AND LOG
+	if [[ $_console = 1 && $_log = 1 ]]; then
+		_debug() {
+			[[ "$_DEBUG" = "false" ]] && return
+			local _timeStamp=$(date +%s.%N)
+			printf '%s %s\n' "${_cDebug}DEBUG${_cReset}" "${@}"
+			printf '%s %s %s\n' "$_timeStamp" "${self} ${_cDebug}DEBUG${_cReset}" "${@}" >>${_logFile}
+		}
+		_info() {
+			local _timeStamp=$(date +%s.%N)
+			printf '%s %s %s\n' "$_timeStamp" "${self} ${_cInfo}INFO${_cReset}" "${@}" >>${_logFile}
+			# hack: below prints _info...multi-line messages are indented
+			SAVEIFS=$IFS
+			IFS=$'\n'
+			_pList=(${1})
+			IFS=$SAVEIFS
+			if [[ ${#_pList[@]} -gt 1 ]]; then
+				printf '%s %s\n' "${_cInfo}INFO${_cReset}" "${_pList[0]} "
+				for (( i=1; i<${#_pList[@]}; i++ ))
+				do
+					printf "\t\t: %s\n" "${_pList[$i]} "
+				done
+			else
+				printf "%s %s\n" "${_cInfo}INFO${_cReset}" "${1} "
+			fi
+		}
+		_warn() {
+			local _timeStamp=$(date +%s.%N)
+			printf '%s %s\n' "${_cWarn}WARN${_cReset}" "${@}"
+			printf '%s %s %s\n' "$_timeStamp" "${self} ${_cWarn}WARN${_cReset}" "${@}" >>${_logFile}
+		}
+		_error() {
+			local _timeStamp=$(date +%s.%N)
+			printf '%s %s\n' "${_cError}ERROR${_cReset}" "${@}"
+			printf '%s %s %s\n' "$_timeStamp" "${self} ${_cError}ERROR${_cReset}" "${@}" >>${_logFile}
+		}
+		_ask() {
+			local _timeStamp=$(date +%s.%N)
+			printf '%s %s' "${_cAsk}USER${_cReset}" "${@}"
+			#printf '%s %s %s\n' "$_timeStamp" "${self} ${_cAsk}USER${_cReset}" "${@}" >>${_logFile}
+			# don't log prompts...if something is important, log as debug
+		}
+	# LOG ONLY
+	elif [[ $_console = 0 && $_log = 1 ]]; then
+		_debug() {
+			[[ "$_DEBUG" = "false" ]] && return
+			local _timeStamp=$(date +%s.%N)
+			printf '%s %s %s\n' "$_timeStamp" "${self} ${_cDebug}DEBUG${_cReset}" "${@}" >>${_logFile}
+		}
+		_info() {
+			local _timeStamp=$(date +%s.%N)
+			printf '%s %s %s\n' "$_timeStamp" "${self} ${_cInfo}INFO${_cReset}" "${@}" >>${_logFile}
+		}
+		_warn() {
+			local _timeStamp=$(date +%s.%N)
+			printf '%s %s %s\n' "$_timeStamp" "${self} ${_cWarn}WARN${_cReset}" "${@}" >>${_logFile}
+		}
+		_error() {
+			local _timeStamp=$(date +%s.%N)
+			printf '%s %s %s\n' "$_timeStamp" "${self} ${_cError}ERROR${_cReset}" "${@}" >>${_logFile}
+		}
+		_ask() {
+			:
+			#local _timeStamp=$(date +%s.%N)
+			#printf '%s %s %s\n' "$_timeStamp" "${self} ${_cAsk}USER${_cReset}" "${@}" >>${_logFile}
+			# don't log _ask prompts
+		}
+	# CONSOLE ONLY
+	elif [[ $_console = 1 && $_log = 0 ]]; then
+		_debug() {
+			[[ "$_DEBUG" = "false" ]] && return
+			printf '%s %s\n' "${_cDebug}DEBUG${_cReset}" "${@}"
+		}
+		_info() {
+			printf '%s %s\n' "${_cInfo}INFO${_cReset}" "${@}"
+		}
+		_warn() {
+			printf '%s %s\n' "${_cWarn}WARN${_cReset}" "${@}"
+		}
+		_error() {
+			printf '%s %s\n' "${_cError}ERROR${_cReset}" "${@}"
+		}
+		_ask() {
+			printf '%s %s' "${_cAsk}USER${_cReset}" "${@}"
+		}
+	else
+		# do nothing
+		_debug() { : ; }
+		_info() { : ; }
+		_warn() { : ; }
+		_error() { : ; }
+		_ask() { : ; }
+	fi
+	export -f _debug
+	export -f _info
+	export -f _warn
+	export -f _error
+	export -f _ask
+}
+# create the log functions now...update them later
+# this logic may need to be reconsidered
+_fLOG
+
+
+####################################
+# HELPER FUNCTIONS
+####################################
+
+_printUsage () {
+  cat << EOF
+
+usage: germ [OPTIONS] <command> [OPTIONS]
+
+options:
+ -h      print this usage info
+ -l      log commands and debug info to log file
+ -d      print debug info to stdout and/or log
+ -s      suppress all stdout/stderr
+ -v      print version number and exit
+
+alternate env settings:
+ -a <name>  set the germ dir name to <name>
+ -w <name>  set the master studio dir to <name> (assumes \$HOME/<name>)
+
+commands:
+ add                 add a new germ entry to the database
+ edit                edit an existing germ entry
+ create              create a new germ git database
+ inspect             run tig on the germ git bare repo
+ sizer               run github sizer tool on germ git bare repo
+
+EOF
+}
+
+_printInfo () {
+  cat << EOF
+
+germ takes simple notes and adds them to a git bare repo,
+keeping minimal metadata and organizing with tree objects.
+
+EOF
+}
+
+####################################
+# PARAMETER PROCESSING FUNCTIONS
+####################################
+
+_getOpts () {
+	# check for global command flags and set VARS accordingly
+	local OPTIND
+	# make the original environment available to _shell for calling back into main
+	export _originalParameters=${*}
+	_debug "${FUNCNAME}: positional parameters read: $*"
+	while getopts ":hsdlva:w:" flag ; do
+		_debug "${FUNCNAME}: OPTIND=$OPTIND flag=$flag"
+		case ${flag} in 
+			h)
+				_printInfo ; _printUsage; exit 0
+				;;
+			a)
+				export _germDirName=$OPTARG
+				# TODO find a better way of avoiding using key words as OPTARGs
+				[[ $OPTARG =~ add|edit|create|print ]] && { _error "'$OPTARG' not allowed as name for -$flag"; exit 1; }
+				_debug "using alternative germ name '$_germDirName'"
+				;;
+			w)
+				export _studioDirName=$OPTARG
+				[[ $OPTARG =~ add|edit|create|print ]] && { _error "'$OPTARG' not allowed as name for -$flag"; exit 1; }
+				_debug "using alternative studio name '$_studioDirName'"
+				;;
+ 	    s)
+				_debug "${FUNCNAME}: enabling silent mode with flag -$flag"
+ 	      export _SILENT=true
+				;;
+			d)
+				_debug "${FUNCNAME}: enabled debug mode with flag -$flag"
+				export _DEBUG=true
+				;;
+			l)
+				_debug "${FUNCNAME}: enabled log mode with flag -$flag"
+				export _LOG=true
+				;;
+			v)
+				_info "${green}verion${reset}: beta"; exit 0
+				;;
+			?)
+				_error "invalid global option: -$OPTARG"; exit 1
+				;;
+		esac
+	done
+	shift $((OPTIND - 1))
+	# export a paired down parameter string flags and args read within this
+	# function will be discarded, leaving behind only that which the rest needs
+	export _workingParams=$*
+	_debug "${FUNCNAME}: _LOG=${_LOG}"
+	_debug "${FUNCNAME}: _SILENT=${_SILENT}"
+	_debug "${FUNCNAME}: _DEBUG=${_DEBUG}"
+	return
+}
+
+_getSubcommand() {
+	# look for the first subcommand and set _subCommand accordingly
+	while ((${#})); do
+		_debug "${FUNCNAME}: reading parameter '${1}'"
+		case $1 in
+			help)
+				_printInfo ; _printUsage; exit 0
+				;;
+			add)
+				_debug "${FUNCNAME}: '$1' called, checking for $1 flags now"
+				_subCommand=$1
+				_getAddOpts
+				return
+				;;
+			edit)
+				_debug "${FUNCNAME}: '$1' called, checking for $1 flags"
+				_subCommand=$1
+				_getEditOpts
+				return
+				;;
+			create)
+				_debug "${FUNCNAME}: '$1' called, checking for $1 flags"
+				_subCommand=$1
+				_getCreateOptions
+				return
+				;;
+			list)
+				_debug "${FUNCNAME}: '$1' called"
+				_subCommand=$1
+				return
+				;;
+			inspect)
+				_subCommand=$1
+				return
+				;;
+			status)
+				_subCommand=$1
+				return
+				;;
+			recover)
+				_subCommand=$1
+				return
+				;;
+			sizer)
+				_subCommand=$1
+				return
+				;;
+			source)
+				_subCommand=$1
+				return
+				;;
+			test)
+				_subCommand=$1
+				return
+				;;
+			*)
+				_error "${FUNCNAME}: '${1}' is not a subcommand"
+				return 1
+				;;
+		esac
+		shift
+	done
+}
+
+_setEnv() {
+	# set (and print) the environment
+	#_info "setting up environment now"
+	export _studioDir="$(dirname ~/.)/${_studioDirName}"
+	export _germDir="${_studioDir}/${_germDirName}"
+	export _germGitDisk="${_germDir}/.gitdisk"
+	export _logFile="${_germDir}/germ.log"
+	export _git="--git-dir=${_germGitDisk}"
+	export _gitWT="--git-dir=${_germGitDisk} --work-tree=${_germDir}"
+	[[ -f "${_logFile}" ]] && _canLog=true || _canLog=false
+	export _canLog
+	_debug "self=$self"
+	_debug "_studioDirName=$_studioDirName"
+	_debug "_studioDir=$_studioDir"
+	_debug "_germDirName=$_germDirName"
+	_debug "_germDir=$_germDir"
+	_debug "_germGitDisk=$_germGitDisk"
+	_debug "_logFile=$_logFile"
+	_debug "_gitWT=$_gitWT"
+	_debug "_git=$_git"
+	_debug "git version= $(git $_git -v)"
+	_debug "_canLog=${_canLog:-false}"
+	_debug "_user=${_user:-unset}"
+	_debug "_DEBUG=$_DEBUG"
+	_debug "_SILENT=$_SILENT"
+	_debug "_LOG=$_LOG"
+	_debug "git command: 'git ${_git}'"
+	_debug "gitWT command: 'git ${_gitWT}'"
+}
+
+_isEnvSufficient() {
+	# check for required tools, report accordingly
+	# TODO add recommended checks with _missing{0:name,1:name}
+	local _sufficient=true
+	for _required in "${_requiredCommands[@]}"; do
+		if ! hash "${_required}" 2>/dev/null; then
+			_warn "${FUNCNAME}: ${_required} not found"
+			_sufficient=false
+		else
+			_debug "${FUNCNAME}: ${_required} found"
+		fi
+	done
+	# check for germ dir (unless we are running create)
+	if [ ! -d "${_germDir}" ]; then
+		if [ -z "${_subCommand:-}" ]; then
+			_error "found no ${_germDir}; run 'germ create' first"
+		 	return 1
+		elif [ ! ${_subCommand:=} = "create" ]; then
+			_error "found no ${_germDir}; run 'germ create' first"
+			_sufficient=false
+		fi
+	fi
+	[ ${_sufficient} = true ] && return 0 || return 1
+}
+
+#################################
+# SUBCOMMAND OPTION PROCESSING
+#################################
+
+_getAddOpts() {
+	# check for _add() flags and args
+	local OPTIND=1
+	set -- ${_workingParams}
+	_debug "${FUNCNAME}: positional parameters read: $*"
+	shift
+	while getopts ":ib" flag "$@"; do
+		case ${flag} in
+			i)
+				# inline add (no editor invoked)
+				_debug "enabled inline mode"
+				_inline=true
+				;;
+			b)
+				# bulk add disables commit...this is a hack
+				_debug "bulk add operation"
+				_bulk=true
+				;;
+			?)
+				 _error "${FUNCNAME}: unknown flag -$OPTARG"; exit 1
+				;;
+		esac
+	done
+	shift $((OPTIND - 1))
+	export _workingParams=$*
+}
+
+_getEditOptions() {
+	local OPTIND=1
+	set -- ${_workingParams}
+	_debug "${FUNCNAME}: positional parameters read: $*"
+	shift
+	while getopts ":f" flag "$@"; do
+		case ${flag} in
+			f)
+				_forceFormat=true
+				_warn "${FUNCNAME}: force mode enabled"
+				;;
+			?)
+				_error "${FUNCNAME}: unknown flag -$OPTARG"; exit 1
+				;;
+		esac
+	done
+	shift $((OPTIND - 1))
+	export _workingParams=$*
+}
+
+_getCreateOptions() {
+	local OPTIND=1
+	set -- ${_workingParams}
+	_debug "${FUNCNAME}: positional parameters read: $*"
+	shift
+	while getopts ":f" flag "$@"; do
+		case ${flag} in
+			f)
+				_forceFormat=true
+				_warn "${FUNCNAME}: force mode enabled"
+				;;
+			?)
+				_error "${FUNCNAME}: unknown flag -$OPTARG"; exit 1
+				exit 1
+				;;
+		esac
+	done
+	shift $((OPTIND - 1))
+	export _workingParams=$*
+}
+
+####################################
+# HEALTH AND STATUS
+####################################
+
+_showStatus() {
+	# arg 1 = level [optional]
+	# 0 = brief [default]
+	# 1 = verbose
+	local _level=${1:-0}
+	_info  "$(git ${_git} --version)"
+	_info "studio name: ${_studioDirName}"
+	_info "studio path: ${_studioDir}"
+	_info "germ path: ${_germDir}"
+	_info "germ gitdisk: ${_germGitDisk}"
+	_info "germ user uuid: ${_user}"
+	_info "germ user: $(_printBlob ${_user})"
+	_info "'git count-objects --human'"
+	_objectCount=$(git ${_git} count-objects --human)
+	_info "germ object count: ${_objectCount}"
+	_lastCommit=$(git ${_git} rev-parse HEAD)
+	_info "last commit: ${_lastCommit}"
+	_lastDate=$(git ${_git} --no-pager log -1 --format="%ad (%ah)")
+	_info "date of last commit: ${_lastDate}"
+}
+# TODO merge these two...one is used in _shell, one not
+_status() {
+	_info "git version: $(git ${_git} --version)"
+	_info "studio dir name: ${_studioDirName}"
+	_info "studio path: ${_studioDir}"
+	_info "germ path: ${_germDir}"
+	_info "germ gitdisk: ${_germGitDisk}"
+	_info "germ user uuid: ${_userUUID:-}"
+	_info "germ current source: ${_currentSource:-default}"
+	git ${_git} commit-graph verify
+	[ $? = 0 ] || _warn "'git commit-graph verify' returned an error"
+	_info "'git rev-parse --show-object-format HEAD'"
+	git ${_git} rev-parse --show-object-format HEAD
+	if [[ $_DEBUG = "true" ]]; then
+		_debug "'git ls-tree -r HEAD' (ie what is in the last commit):"
+		git ${_git} ls-tree -r HEAD
+		_debug "'git ls-files --stage' (ie what is in the index):"
+		git ${_git} ls-files --stage
+	fi
+	_info "'git count-objects --human'"
+	git ${_git} count-objects --human
+	_info "'git count-objects -vH'"
+	git ${_git} count-objects -vH 
+	_info "count all git objects:"
+	_info "'git cat-file --batch-all-objects --batch-check | wc -l'"
+	git ${_git} cat-file --batch-all-objects --batch-check | wc -l
+	_info "how many total objects:"
+	_info "'find ${_germGitDisk}/objects -type f | wc -l':" 
+	find ${_germGitDisk}/objects -type f | wc -l
+	_info "git cat-file -p main^{tree}' (ie show tree namespace):"
+	git ${_git} cat-file -p main^{tree}
+	_info "'git fsck --full'"
+	_gitfsck=$(git ${_git} fsck --full)
+	_gitFsckExit=$?
+	while IFS= read -r line; do
+		if [[ $line =~ ^dangling ]]; then
+			echo "${yellow}$line${reset}"
+		fi
+	done <<< "${_gitfsck}"
+	_info "git fsck exit status: '${_gitFsckExit}'"
+	_gitDiff="git ${_git} --no-pager diff --cached --summary HEAD"
+	local _lastCommit=$(git ${_git} rev-parse HEAD)
+	_inconsistentCount=$(${_gitDiff} | wc -l)
+	_info "last commit id: ${_lastCommit}"
+	if [[ ${_inconsistentCount} -ne 0 ]]; then
+		_warn "inconsistent count: ${_inconsistentCount}"
+		if [[ $_DEBUG = "true" ]]; then
+			_warn "'git diff --cached --summary HEAD' results:"
+			git ${_git} --no-pager diff --cached --summary HEAD
+		fi
+	else
+		_info "inconsistent count: ${_inconsistentCount}"
+	fi
+	_isIndexClean || _warn "INDEX IS INCONSISTENT"
+}
+
+_sizer() {
+	cd ${_germGitDisk}
+	git-sizer --verbose
+}
+
+_inspect() {
+	tig -C${_germGitDisk}
+}
+
+##################################
+# ADD
+##################################
+
+_add() {
+	local _germString=
+	local _commitMsgString=
+	local _primaryKey=
+	# check if source is set already
+	if _isSourceSet; then
+		_currentSource=$(_getSource)
+	else
+		_currentSource="default"
+	fi
+	# FIX THIS...-i should not require -b
+	# -b just means read from stdin...and it can be one or many lines
+	# QUESTION...is it possible to detect a bulk mode input...so that when bulk is
+	# detected, we add blobs and only commit when the detected bulk input is done.
+	# the problem is that when i am doing a bulk entry now...i call the script for
+	# each entry:
+	# time for i in {1..1000}; do ./gen_random_germ | germ -a periplume -w studiodev add -b -i ; done
+	# so this would be very difficult
+	if [ ${_inline:-null} = "true" ]; then
+		if [ -p /dev/stdin ]; then
+			_debug "reading from stdin"
+			_germString=$(cat)
+		else
+			[ -z "${_workingParams}" ] && { _error "${FUNCNAME}: 'add -i' cannot contain an empty message"; return 1; }
+			_debug "found an inline string: '$_workingParams'"
+			_germString="${_workingParams}"
+		fi
+	else
+		_germString=$(vipe)
+	fi
+	[[ -z "${_germString}" ]] && { _error "no empty strings allowed"; return; }
+	_commitMsgString=$(_buildCommitMsg "${_germString}") || _commitMsgString="empty commit msg"
+	# set up primary key namespace mapping
+	#_primaryKey=$(_getNewKey) || _error "could not get a new unique key"
+	# ADD the BLOB...get the BLOB id
+	_blobID=$(git ${_git} hash-object --stdin -w <<< "${_germString}")
+	# map blob to primary key in a/
+	#_mapBlob ${_blobID} ${_primaryKey}
+	# map blob to the source namespace
+	_mapBlob ${_blobID} c/${_currentSource}/cat/${_blobID}
+	# map tags
+	_mapTags $_blobID
+	# don't commit on each add during a bulk entry
+	# some other logic is needed here to confirm the bulk add is over
+	if [[ ${_bulk:-} = "true" ]]; then
+		:
+	else
+		_doCommit "${_commitMsgString}"
+	fi
+# TODO add timer to catch left screen
+# TODO use nano for certain functions, vim for others?
+# TODO add -b and -i need some thinking.
+}
+
+_edit() {
+	# arg 1 = blobID
+	local _germString
+	local _commitMsgString
+	# find the source
+	# read the blob in
+	# load the blob into vipe for editing
+	# on vipe exit, check if the new _germString is different than the first
+	# if it is the same, just return
+	# if it is different
+	# remove all $1 blob entries in the tag space
+	# remove the $1 blob from the _currentSource list
+	# run _mapTags
+	# commit 
+	_germString=$(vipe $(_printBlob ${1}))
+	[[ -z "${_germString}" ]] && { _warn "empty entries not allowed"; return; }
+}	
+
+_buildCommitMsg() {
+	# arg 1 = string [required]
+	# read string (the whole blob) line by line
+	# construct git commit message string (combining lines until max exceeded)
+	# truncate if necessary and append with "..."
+	# total character count <=75
+	# print string or return 1
+	# TODO: consider what to do with tags (ie strip the leading hash?)
+	local _maxLength=75
+	local _commitMsgString=
+	local _lines
+	# empty string not allowed
+	[ -z "${1:-}" ] && return 1
+	# count lines
+	l="${1//[!$'\n']/}"
+	_lines=$((${#l} + 1))
+	# process multi-line entries
+	while read -r line; do
+		# single line entry, set and break
+		if [ ${_lines} = 1 ]; then
+			_commitMsgString="${1}"
+			break
+		fi
+		words=($line)
+		# one word lines
+		if [[ ${#words[@]} = 1 ]]; then
+			# if the commit message string is empty
+			if [[ -z "${_commitMsgString}" ]]; then
+				_commitMsgString+="${line%% *}:"
+			elif [[ ${_commitMsgString:(-1)} = ":" ]]; then
+				_commitMsgString+=" ${line%% *}"
+			else
+				_commitMsgString+="; ${line%% *}"
+			fi
+		# empty lines
+		elif [[ ${#words[@]} = 0 ]]; then
+			true
+		# multi-word lines
+		else
+			if [[ ${_commitMsgString:(-1)} = ":" ]]; then
+				# first line after first-word+colon
+				_commitMsgString+=" ${line}"
+			elif [[ -z "${_commitMsgString}" ]]; then
+				# first slot in empty commit message string
+				_commitMsgString+="${line}:"
+			else
+				# insert semi-colon to designate new line
+				_commitMsgString+="; ${line}"
+			fi	
+		fi
+		# once we have exceeded the maxLength...stop processing
+		if [[ ${#_commitMsgString} -ge ${_maxLength} ]]; then
+			break
+		fi
+	done < <(printf '%s\n' "${1}")
+	# truncate if necessary, appending elipsis to indicate truncation
+	if [[ ${#_commitMsgString} -ge ${_maxLength} ]]; then
+		_commitMsgString="${_commitMsgString:0:${_maxLength}}..."
+	fi
+	# this should never occur...
+	[ -z "${_commitMsgString}" ] && return 1
+	# return the final string...with echo (should be using the indirect variable
+	# here
+	echo "${_commitMsgString}"
+}
+
+_mapTags() {
+	# arg 1 = blobID
+	# read blob into array, read line by line, find tag and add to t/<tag>/blobID
+	[ $# -ne 1 ] && return 1
+	local _blobID=${1}
+	local _blobArray
+	local _line
+	_readBlob ${_blobID} _blobArray
+	for _line in "${_blobArray[@]}"; do
+		if [ -z "${_line:-}" ]; then
+			_debug "blank line"
+			continue	# ignore blank lines
+		elif [ "${_line:0:1}" = "#" ]; then
+			_tag=${_line%% *}
+			_debug "tag '${_tag}' detected"
+			#if [ -z "${_tag:1}" ]; then
+			if [[ "${_tag:1}" =~ ^[[:alnum:]]  ]]; then
+				# add the blob to the tag space
+				_debug "add blob '${_blobID}' to the t/${_tag:1} namespace"
+				_mapBlob ${_blobID} t/${_tag:1}/${_blobID}
+			else
+				_debug "ignore this '${_tag:1}'"
+				true
+			fi
+		fi
+	done
+}
+
+############################
+# CREATE
+############################
+
+_create() {
+	# create a new germ database
+	local _gitUserName=$(git config --global --get user.name)
+	local _gitUserEmail=$(git config --global --get user.email)
+	local _gitDisk=${_germGitDisk}
+  trap _irishExit SIGINT
+	_ask "enter studio name ["${_studioDirName}"] "
+	read _studioName
+	[ -z "${_studioName}" ] || _studioDirName="${_studioName}"
+	_ask "enter germ name ["${_germDirName}"] "
+	read _germName
+	[ -z ${_germName} ] || _germDirName="${_germName}"
+	_ask "enter preferred username [${_gitUserName}] "	
+	read _userName
+	[ -z ${_userName} ] && _userName="${_gitUserName}"
+	_ask "enter preferred email [${_gitUserEmail}] "	
+	read _userEmail
+	[ -z ${_userEmail} ] && _userEmail="${_gitUserEmail}"
+	_setEnv
+	_info "studio dir name: ${_studioDirName}"
+	_info "studio path: ${_studioDir}"
+	_info "germ path: ${_germDir}"
+	_info "germ gitdisk: ${_germGitDisk}"
+	_info "germ user name: ${_userName}"
+	_info "germ user email: ${_userEmail}"
+	read -rsn1 -p "$(_ask 'proceed? (y/n)')" _yn
+	echo
+	[[ "$_yn" != "y" ]] && { _error "aborting"; exit 1; }
+	[ ! -d "${_germDir}" ] && mkdir -p "${_germDir}"
+	if [ ${_DEBUG} = "true" ]; then
+		gitdisk -d create -b ${_germGitDisk} || { _error "could not create"; exit 1; }
+	else
+		gitdisk create -b ${_germGitDisk} || { _error "could not create"; exit 1; }
+	fi
+	touch ${_logFile}
+  git config --global includeif.gitdir:"${_germDir}".path "${_germDir}/.gitconfig"
+	git config --file="${_germDir}"/.gitconfig user.name "${_userName}"
+	git config --file="${_germDir}"/.gitconfig user.email "${_userEmail}"
+	# _user is global var and short
+	# _userUUID is blobid and long
+	_userUUID=$(_uuidGen "${_userName}:${_userEmail}")
+	_user=$(_userAdd "${_userName}:${_userEmail}")
+	# map u/uuid/self to blob of git user string "user:email"
+	# set /u/uuid/current as empty
+	_mapBlob "${_userUUID}" "u/${_user}/self"
+	_mapEmpty "u/${_user}/current"
+	# write blob, get blobid (hash key)
+	#_blobID=$(_writeBlob "${self} created by ${_userName}:${_userEmail} (${_user}) $(date)")
+	# map blob to a/DATE/uuid.seconds
+	#_primaryKey=$(_getNewKey) || _error "could not get a new unique key"
+	#_mapBlob ${_blobID} ${_primaryKey}
+	_saveSource "default" "default source created by ${self}"
+	_setSource "default"
+	_doCommit "${self} created by ${_userName}:${_userEmail} (${_user}) $(date)"
+
+# we also will need to use show.untrackedfiles = no  ??
+# git config --global log.date local  ... or check that these are already set in
+# global
+
+# TIP
+# git help --config
+# lists all the git config variables
+}
+
+
+
+# TODO next
+# update add()
+# add the user
+# decide whether to put the user:email blob or use an empty /self
+# put the first blob in
+# make the _userUUID a global VAR we get and set
+# change the a/ path to be a/YEAR/MONTH/DAY/$userUUID.$unixSeconds
+#
+# add some sanity checks with user management...because the possibility of a
+# lost or broken git config risks breaking the whole thing if we rely on the git
+# config includeif
+# then build _source()
+# then put data in and move this to a production state
+# much of the recovery functions will have to come in time
+# additionally, migrating, merging, etc will have to follow later
+# need to move data in and begin testing with actual data for the next phase,
+# which is to begin building out the namespace mapping and the viewing,
+# browsing, searching, and editing process...including blob naming, blob
+# workflows, directory lattice, and project creation
+
+
+
+####################################
+# GERM PRIMITIVES
+#
+# _getNewKey		generate the unique filesystem name for the blob: $uuid.$seconds 
+# _setUserUUID	set the global var _user
+# _userSet 
+# _userPrint
+# _userAdd
+# _doesUserExist
+# _uuidGen
+#
+# TODO add index.lock detection function which loops, waiting for the lock to
+# disappear...
+
+_getNewKey() {
+	# generate a new unique unix_time key path using date +%s and global _user
+	# make sure it is unique...wait a couple seconds...otherwise return 1
+	# print the key path
+	# used to create all 'germ' blobs
+	# not used for metadata
+	local _d="$(date +%s.%N)"
+	local _unixseconds="$(date +%s)"
+	local _u="${_userUUID:0:4}"
+	local i=0
+	local _source="default"
+	#local _keyPath="a/$(date +%Y)/$(date +%m)/$(date +%d)/${_u}.${_d}.txt"
+	# playing with tree creation...how much of a difference this will make
+	# 1000 germs using the above tree structure:
+	# | * Trees 
+	# |   * Count                    |  5.01 k   |
+	# |   * Total size               |  27.4 MiB |
+	# |   * Total tree entries       |   507 k   |
+	#
+	# the change below makes little difference
+	#local _keyPath="a/${_u}.${_d}.txt"
+	# TRY using the blob rev-parse id and adding it to the file name
+	# $_source/$_user/${_unixseconds:0:8}/${_unixseconds:8}.${_blobID:0:8}.txt
+	local _keyPath="${_source}/${_u}/${_unixseconds:0:8}/${_unixseconds:8}.${_d}"
+	while _doesKeyExist "${_keyPath}"; do
+		sleep 0.5
+		((i++))
+		if [[ "$i" == '5' ]]; then
+			return 1
+		fi
+	done
+	echo "${_keyPath}"
+# NB this is the primary key for all data in...the decision to name it as a
+# truncated UUID plus the time plus the .txt may have ramifications.
+# QUESTION: this is a plain text system; would file suffix ever matter?
+# QUESTION: is there any reason to include the suffix in the first place?
+# the possibility of collision if/when merging is very low...using 4 characters
+}
+
+
+##########
+# _user
+##########
+# over-engineered multi-user capability
+# adaptable...user handle is a variable-length truncated string of a hash
+# the multiple users can be pseudonyms (for a single person)
+# or many different users
+# the master a/ index should always merge cleanly
+# the other namespaces may not...by design
+# the concept of "identity" and "pseudonym" interact
+#
+# data
+# user name:			string, can contain spaces, upper, lower, digits ?
+# email address		string, valid email address
+# combined into:	"user name:email address"
+# this is the "pseudonym"
+#
+# external
+# git config					supplies seed data
+# $HOME/.gitconfig		includeIF statements to:
+# $GERM/.gitconfig		contains the git user name(s)	
+# 
+# global
+# _userUUID = full hash of pseudonym ("user name:email address") 
+# _user = user "handle" (truncated hash of _userUUID; unique variable-length string)
+#
+# index
+# u/_user/self	-> 	blob containing pseudonym 
+# u/*/current		->	empty blob (unique indicator) default
+# u/*/alpha			->	empty blob for first user
+#
+# settings
+# _minUserLength		defines the shortest possible _user
+# * this may turn out to be a bad design decision unless u/$_user/self is more
+# ephemeral...ie if/when an instance is changed from len=2 to len=3
+# 
+# methods
+# _uuidGen				generate the user uuid (_userUUID)
+# _doesUserExist	check full _userUUID with _printBlob (no user match)
+# _userAdd				using _userUUID, find the shortest match and create user
+# _userSet				set the global _user and u/$_user/current
+# _userPrint			print user details
+#
+# use
+# git commit messages
+# composing as pseudonym or anonymous, eg
+# a context that can be used as desired
+# main index for blob naming	a/2023/02/08/$_userUUID.$unixseconds
+# displayed in shell status line (as "_user")
+# can be used to filter
+#
+# future
+# aliasing (to handle email or name change without identity change)
+
+_userSet() {
+	# arg 1 = _user [optional]
+	# check for global var _user (override)
+	# validate this user...return if no such user exists
+	local _u
+	local _uuid
+	# if no arg supplied
+	if [ -z "${1:-}" ]; then
+		# exit if create is running
+		[[ ${_subCommand:-} = "create" ]] && return
+		# and if global _user is unset
+		if [ -z "${_user:-}" ]; then
+			# try to get the user from u/*/current
+			_u=$(_getKeyValue u/*/current)
+			_uuid=$(_getBlobID u/${_u}/self)
+		# _user was set (manually) in the script
+		else
+			_u=$_user
+			if _doesKeyExist "u/${_u}/self"; then
+				_uuid=$(_getBlobID u/${_u}/self)
+			else
+				_warn "$_user is not valid"
+				exit
+			fi
+		fi
+	# _user was supplied as $1
+	else
+		_u=$1
+		if _doesKeyExist "u/${_u}/self"; then
+			_uuid=$(_getBlobID u/${_u}/self)
+		else
+			_warn "$_user is not valid"
+			exit
+		fi
+	fi
+	export _user=$_u
+	export _userUUID=$_uuid
+	#_mapEmpty u/$_u/current
+	##
+	# THIS TOTALLY BREAKS while running a bulk import
+	## make it atomic
+	#_mapEmpty u/$_u/current
+}
+
+_userSave() {
+	if _doesKeyExist u/*/current; then
+		_existing=$(_getKeyValue "u/*/current")
+		_mapEmpty u/$_existing/current.removing
+		_mapEmpty u/$_user/current
+		_deleteKey u/$_existing/current
+		_deleteKey u/$_existing/current.removing
+	else
+		_mapEmpty u/$_user/current
+	fi	
+}
+
+
+_userPrint() {
+	# arg 1 = _user [optional]
+	local _l_user=${1:-${_user:-unset}}
+	local _l_name
+	local _l_email
+	local _l_us
+	_info "supplied: '${1:-}'"
+	_info "checking for '${_l_user}'"
+	_info "global: _user= '${_user:-unset}'"
+	_info "global: _userUUID= '${_userUUID:-NULL}'"
+	_info "index: user '${_l_user}' _userUUID= '$(_getBlobID u/${_l_user}/self)'"
+	_info "index: 'current' user= $(_getKeyValue u/*/current)"
+	_l_us=$(_readKey u/${_l_user}/self)
+	_info "index: user name= '${_l_us%%:*}'"
+	_info "index: user email= '${_l_us##*:}'"
+}
+
+_userAdd() {
+	# arg 1 = "user:email"
+	# get the userUUID
+	# check if the user exists
+	# if not, find the shortest user handle
+	# add the blob ; get the blobID
+	# map the blob
+	# check for u/*/alpha
+	# mapEmpty if first user
+	# _mapBlob /u/$truncation/self -> blobID
+	local _minUserLength=4
+	local _blobID
+	local _userUUID
+	local _user
+	local _userName
+	local _userEmail
+	local _userString="${1:-}"
+	[ -z "${1:-}" ] && { _warn "no user name supplied" ; return 1 ; }
+	# validate user string ( "name string" : "email string")
+	_userName="${_userString%%:*}"
+	_userEmail="${_userString##*:}"
+	[ "${_userString}" = "${_userName}:${_userEmail}" ] || { _warn "'${_userString}' malformed" ; return 1 ; }
+	# generate UUID
+	_userUUID=$(_uuidGen "${_userString}")
+	_doesUserExist "${_userUUID}" && { _warn "'${_userUUID} ${_userString}' exists" ; return 1 ; }
+	# write the unique user string
+	_blobID=$(_writeBlob "${_userString}")
+	# look for shortest user handle
+	while _doesKeyExist "u/${_blobID:0:${_minUserLength}}/self"; do
+		((_minUserLength=_minUserLength+1))
+	done
+	# map the user to u/
+	_user=${_blobID:0:${_minUserLength}}
+	_mapBlob ${_blobID} "u/${_user}/self"
+	_doesKeyExist u/*/alpha || _mapEmpty "u/${_user}/alpha" 
+	# return the user name
+	echo $_user
+}
+
+_doesUserExist() {
+	# arg 1 = _userUUID (full hash)
+	_printBlob "${1}" || return 1
+}
+
+_uuidGen() {
+	local _u
+	local _e
+	local userstring
+	local uuid
+	if [[ -z "${1:-}" ]]; then
+		_u=$(git ${_git} config --get user.name &>/dev/null) || return 1
+		_e=$(git ${_git} config --get user.email &>/dev/null) || return 1
+		userstring="${_u}:${_e}"
+	else
+		userstring="${1}"
+	fi
+	uuid=$(echo "${userstring}" | git ${_git} hash-object --stdin)
+	echo ${uuid}
+}
+
+######################################
+# GIT PRIMITIVES
+#
+# generic git interface functions we use
+# _writeBlob			write a blob...return a blobID
+#	_readBlob				read a blob into a bash array and "return" as array (nameref)
+# _printBlob			print the contents of a blob to stdout
+# _mapBlob				add an entry in the index pointing to the blobID
+# _mapEmpty				write an empty blob as a key to a path (eg u/$uuid/current)
+# _doCommit				commit changes to the repo
+# _doesKeyExist		check for an existing key in namespace (eg t/$tag/catalog/x)
+# _isIndexClean		check the integrity and state of blobs and maps
+# _getBlobID			given a name in the index, return the blobID
+
+_getBlobID() {
+	# arg 1 = key
+	git ${_git} ls-files --stage "${1}" | cut -f2 -d' '	
+	# TODO make this a bash string slice
+}
+
+_writeBlob() {
+	# arg 1 = blob
+	# return blobID
+	local blobID
+	[ -z "${1:-}" ] && return 1
+	blobID=$(git ${_git} hash-object --stdin -w <<< "${1}")
+	echo "${blobID}"
+}
+
+_readBlob() {
+	# arg 1 = blob ID
+	# arg 2 = variable name to use for array to "pass" value back
+	# read a blob into a bash array and put it into the variable name passed as
+	# arg 2 (bash nameref indirect variable)
+	local _blobID=$1
+	# use var nameref indirection to "return" the array
+	local -n _array=$2
+	# check if the blob is there
+	git ${_git} cat-file -e ${_blobID} &>/dev/null || { _warn "noting to find at ${_blobID}"; return 1; }
+	# read the blob into a local array
+	readarray -t _array < <(git ${_git} cat-file -p ${_blobID})
+	if [ ${#_array[@]} -ne 0 ]; then
+		_debug "found ${#_array[@]} line[s] in the new blob"
+		return 0
+	else
+		_debug "${_blobID} is empty"
+		return 1
+	fi
+}
+
+_printBlob() {
+	# arg 1 = blob ID
+	# print the contents of the blob to stdout
+	git ${_git} cat-file -p ${1} 2>/dev/null || return 1
+}
+
+_mapBlob() {
+	# arg 1 = blobID (full sha)
+	# arg 2 = path
+	[[ -z "${1:-}" || -z "${2:-}" ]] && return 1
+	git ${_git} update-index --add --cacheinfo 10064,"${1}","${2}"
+}
+
+_mapEmpty() {
+	# arg 1 = path
+	[ -z "${1:-}" ] && return 1
+	_emptyBlob=$(git ${_git} hash-object -w --stdin </dev/null)
+	git ${_git} update-index --add --cacheinfo 10064,$_emptyBlob,"${1}"
+# NOTE this is a functional equivalent of git add --intent-to-add, with the
+# exception that command expects a work-tree, while we have none
+}
+
+_doCommit() {
+	# discrete operation...write the index as a commit
+	_commitMsg="${1}"
+	_tree=$(git ${_git} write-tree)
+	# next make sure there is a parent
+	if git ${_git} rev-list --max-parents=0 HEAD &>/dev/null; then
+		_parent=$(git ${_git} rev-list -n1 --all HEAD)
+		_commit=$(git ${_git} commit-tree $_tree -p $_parent -m "$_commitMsg")
+	else
+		# first commit
+		_commit=$(git ${_git} commit-tree $_tree -m "[genesis] ${_commitMsg}")
+	fi
+	git ${_git} update-ref HEAD "${_commit}"
+	return 0
+	# not sure that using HEAD is the "right thing" here
+}	
+
+_doesKeyExist() {
+	# arg 1 = key (namespace path)
+	# return 0 if true
+	# return 1 if false (no key exists)
+	git ${_git} ls-files --error-unmatch "${1}" &>/dev/null || return 1
+}
+
+_isIndexClean() {
+	git ${_git} diff-index --quiet --cached main 2>&1 >/dev/null || return 1
+}
+
+
+################
+# SOURCE
+################
+
+# source is an exclusive category...an entity (blob or germ) cannot be a member
+# of more than one source.  an entity can be without a source (ie source=null)
+# it can also be called 'context'
+# the 'source' is a generic organizing category and can be used in a variety of
+# ways.  when it is set, all new germ entries will be cataloged (logged) into
+# the source log c/$source/self.catalog
+# the source catalog file:
+# a non-sorted list of blobs added to the 'category'
+#
+# methods
+# _addToSource		add a blob (key: a/2022/10/01/$uuid.$seconds) to
+# c/$source/self.catalog file
+#
+# future
+# add a source "type" value
+# c/$source/self.type (or type.VALUE and use emptyblob)
+# eg, indexcards, notebook, lecture, marginalia, loose, iphone, etc
+
+# NOT USED
+_addToSource() {
+	# arg 1 = source name
+	# arg 2 = key to blob
+	local _cat=
+	local _id=
+	#_doesKeyExist c/${1}/self.catalog && _currentCat=$(_getBlobID "c/${1}/self.catalog")
+	if _doesKeyExist c/${1}/self.catalog; then
+		_currentCat=$(_getBlobID "c/${1}/self.catalog")
+		_cat=($(_printBlob "${_currentCat}"))
+	else
+		_cat=()
+	fi
+	_cat+=(${2})
+	_id=$(_writeBlob "$(printf '%s\n' ${_cat[@]})")
+	_mapBlob "${_id}" "c/${1}/self.catalog"
+}
+
+_getSource() {
+	# print the current SOURCE
+	# read c/SOURCE/current
+	x=$(git ${_git} ls-files c/*/current)
+	x=${x#c/*}
+	x=${x%/*}
+	#[[ -z "${x}" ]] && echo "null" || echo "${x}"
+	echo ${x}
+	# this prints empty string if no source...printing null is not a good idea,
+	# instead, change behavior above
+}
+
+_isSourceSet() {
+	# no args
+	# check for c/*/current
+	# return 0 if true
+	# return 1 if false
+	_doesKeyExist c/*/current
+}
+
+_isSourceNew() {
+	# arg 1 = new source name
+	# checks for c/$1/self
+	# if it exists, return 1 (no it is not new)
+	# if it does not exist, return 0 (yes it is new)
+	! _doesKeyExist "c/${1}/self"
+}
+
+_setSource() {
+	# arg 1 = new source
+	# check if source is set, if so, remove
+	# then set to new
+	[ -z "${1:-}" ] && return 1
+	_isSourceSet && _deleteKey "c/*/current"
+	# THIS WILL BE PROBLEMATIC AS IT IS NOT ATOMIC
+	_mapEmpty "c/${1}/current"
+	#_doCommit "[source] made ${1} current"
+	export _currentSource=${1}
+}
+
+_saveSource() {
+	# arg 1 = source name
+	# arg 2 = source description
+	_id=$(_writeBlob "${1}")
+	_mapBlob "${_id}" "c/${1}/self"
+	_desc=$(_writeBlob "${2}")
+	_mapBlob "${_desc}" "c/${1}/self.description"
+	#_doCommit "[source] added ${1}"
+}
+
+# germ methods required
+# _getKeyValue (boolean)
+# _deleteKey
+# _readKey
+# _listKeys
+# _updateKey
+#
+# germ Bkey is a boolean or binary flag which indicates something
+# it is exclusive in its namespace...ie c/*/NAMESPACE can only contain one Bkey
+# its first use is with indicating the current user u/$UUID/current
+# it also is used to indicate the current notebook source with c/$SOURCE/current
+# it uses _mapEmpty to map an empty blob
+# it refers to its parent directory in the namespace
+# METHODS USED
+# _doesKeyExist		(git)
+# _deleteBkey			(germ bkey)
+# _insertBkey			(germ bkey)
+# _getBkeyValue		(germ bkey)
+#
+# germ Key is used similarly except that it contains information beyond an
+# exclusive boolean setting
+# ex. u/$UUID/self points to a blob from which the $UUID is derived, the string
+# contianing the "user name:user email" used by git
+# the information in the blob to which self points is arbitrarily defined by the
+# use...u/*/self --> "user name:user email"
+# c/*/self --> "source name"
+# additionally, a key can contain additional attributes, eg c/*/self.description
+# which contains the user-supplied description of the source
+# the self key is used to enforce uniqueness and map into namespace the
+# truncated hash
+#
+# METHODS USED
+# _doesKeyExist
+# _readKey
+# _listKeyAttributes
+# _updateKey
+
+_getKeyValue() {
+	# arg 1 = key eg c/*/current
+	# prints value from c/$value/$key
+	git ${_git} ls-files "${1}" | cut -f2 -d/
+}
+
+_getKeyList() {
+	# arg 1 = key space eg c/$source/self.*
+	git ${_git} ls-files "${1}" | cut -f3 -d/
+}
+
+_deleteKey() {
+	# arg 1 = key
+	git ${_git} --work-tree=${_germDir} rm --cached --quiet "${1}"
+	# THIS SHOULD be made more discrete
+	# this REMOVES all keys!!!
+}
+
+_readKey() {
+	# given key, eg c/$source/self.description
+	# get the blob id
+	# print the blob
+	local _blobid
+	_blobid=$(git ${_git} ls-files --stage ${1} | cut -d' ' -f2)
+	if [ -z ${_blobid} ]; then
+		echo "error, blob does not exist"
+	else 
+		_printBlob ${_blobid}
+	fi
+}
+# exporting these functions to give fzf access to them
+export -f _readKey
+export _git
+export -f _printBlob
+export -f _doesKeyExist
+
+_getSourceList() {
+	# create a list from c/*/self
+	git ${_git} ls-files --stage c/*/self | cut -f2 -d/
+}
+
+_printSourceEntities() {
+	# arg 1 = source
+	git ${_git} ls-files --format='%(objectname)' c/${1}/cat
+}
+export -f _printSourceEntities
+
+_getSourceCount() {
+	# arg 1 = source
+	local _count=0
+	_count=$(_printSourceEntities ${1} | wc -l)
+	echo "$_count"
+}
+export -f _getSourceCount
+
+# source methods
+# _isSourceSet		check for c/*/current
+# _getSource			return c/$source/current
+# _setSource			remove c/*/current (if set) and add c/$source/current 
+# _addSource			user dialog to add new and (optionally) set current
+#
+# source name: eg lgb-12Jan2023
+# source description: arbitrary text describing source
+
+
+# TODO consider adding a super-set (like binding old notebooks into one)
+# TODO merge notebooks, split notebooks, archive, print, and delete
+_source() {
+	local _currentSource=""
+	export _maxLength=25
+	export _minLength=1
+	# check if source default is set already
+	if _isSourceSet; then
+		_currentSource=$(_getSource)
+	else
+		_currentSource="default"
+	fi
+	######################
+	#### MAIN MENU
+	######################
+	_mainMenu() {
+	local _mainSelection
+	_showOptions() {
+	if [[ ${_currentSource} = "default" ]]; then
+		_displaySource="${yellow}default${reset}"
+	else
+		_displaySource="${green}${_currentSource}${reset}"
+	fi
+	_sc=$(_getSourceCount ${_currentSource})
+	if [[ ${_sc} = 0 ]]; then
+		_sourceCount="${yellow}${_sc}${reset}"
+	else
+		_sourceCount="${green}${_sc}${reset}"
+	fi
+	echo -ne "
+    current source: ${_displaySource} [${_sourceCount}]
+
+    c) change current source
+    b) browse entities in current source
+    t) browse tags
+    s) show details
+    l) list entities
+    e) edit description
+    r) rename current source
+    a) add new source
+    m) merge two sources (future)
+    ?) help
+    q) return to germ
+
+"
+	}
+	_showOptions
+	_previewSource() {
+		# used by fzf during source change...shows description and entity count
+		echo "source: $1"
+		echo "entities: $(_getSourceCount $1)"
+		echo
+		echo "----DESCRIPTION-------------------"
+		_readKey c/$1/self.description
+	}
+	export -f _previewSource
+	_chooseSource() {
+		# fzf-based chooser function
+		local _newSourceName
+		local _fzfPrompt="--prompt=TYPE-TO-FILTER> --info=hidden"
+		local _fzfColor="--color=bg:#222222,preview-bg:#333333,header:yellow"
+		local _fzfHeader="--header=choose from the list above"
+		local _fzfPreview="--preview=_previewSource {} --preview-window=50%"
+		local _fzfBack="--bind=backward-eof:clear-query"
+		#local _fzfEsc="--bind=esc:cancel --bind=enter:accept-non-empty --bind=ctrl-c:cancel"
+		local _fzfEsc="--bind=esc:cancel --bind=enter:accept-non-empty"
+		_newSourceName=$(_getSourceList | fzf ${_fzfBack:-} ${_fzfEsc} ${_fzfPrompt} "${_fzfColor}" "${_fzfHeader}" "${_fzfPreview}")
+		echo ${_newSourceName}
+	}
+	while read -r -s -n 1 -p"$(_ask 'enter selection [? for help]') " _mainSelection; do
+	# with or without readline makes or breaks this shell
+	#while read -r -e -s -n 1 -p"$(_ask 'enter selection [? for help]') " _mainSelection; do
+		echo	# curious problem here...using the _ask log function may not be the right decision
+		case $_mainSelection in
+ 			c)
+				_setSource $(_chooseSource) || _warn "aborted source change"
+				_showOptions
+				;;
+			s)
+				_info "current source: ${_currentSource}"
+				_info "description: $(_readKey c/${_currentSource}/self.description)"
+				;;
+			e)
+				_newDescription=$(_readKey "c/${_currentSource}/self.description" | vipe)
+				_id=$(_writeBlob "${_newDescription}")
+				_mapBlob "${_id}" "c/${_currentSource}/self.description"
+				_doCommit "[source] updated ${_currentSource} description"
+				_showOptions
+				;;
+			b)
+				_browse ${_currentSource}
+				;;
+			t)
+				_browseTags $(_printTagEntities)
+				;;
+			a)
+				_addSource
+				_showOptions
+				;;
+			l)
+				_debug "current source= ${_currentSource}"
+				_info "entities   : $(_printSourceEntities ${_currentSource})"
+				;;
+			m)
+				_warn "merge is a future feature...promise"
+				;;
+			r)
+				_renameSource "${_currentSource}"
+				_showOptions
+				;;
+			q)
+				return
+				;;
+			h|\?)
+				_info "use 'source' to add and manage media source list"
+				_info "eg, naming notebooks, sets of papers, etc"
+				_info "a notebook name is used as a virtual category"
+				_showOptions
+				;;
+			$'\e')
+				# read and ignore escape sequences (including esc)
+				read -rsn1 -t .002 tmp || { _warn "esc key not allowed" ; continue ; }
+				if [[ "$tmp" == "[" ]]; then
+					read -rsn1 -t .002 tmp || _warn "can't read any more"
+					case "$tmp" in
+						# ignore arrow keys
+						"A"|"B"|"C"|"D") { _warn "arrow keys not allowed" ;  } ;; 
+						# ignore insert and delete
+						"2"|"3") { _warn "insert and delete keys not allowed" ; } ;; 
+						# ignore home and end
+						"H"|"F") { _warn "home and end keys not allowed" ; } ;; 
+						# ignore all the rest
+						*) { _warn "key '$tmp' not allowed" ; } ;;
+					esac
+				else
+					_warn "ignoring escape key '$tmp'"
+				fi
+				# flush out stdin if necessary
+				read -rsn6 -t .002 || continue 
+				;;
+			$'\177')
+				# catch control characters
+				_warn "control character detected; ignoring"
+				continue
+				;;
+			$'\04')
+				printf %s "${#_mainSelection} character "
+				(export LC_ALL=C; printf '%s\n' "made of ${#_mainSelection} byte(s) was read")
+				_warn "ctrl-d detected ['${_mainSelection}']"
+				continue
+				;;
+			?)
+				_warn "wrong selection ['${_mainSelection}']; try again"
+				;;
+			esac
+		done
+	}
+
+	##########################
+	### MENU FUNCTIONS
+	##########################
+	_addSource() {
+		local _newSourceName
+		_interactiveSourcePicker _newSourceName 
+		_isSourceNameValid "${_newSourceName}" || { _error "invalid"; return; } 
+		[[ -z ${_newSourceName:-} ]] && return
+		[[ ${_newSourceName} = ${_currentSource} ]] && return
+		while read -r -e -p "$(_ask "enter a description for '${_newSourceName}': ")" _newSourceDescription; do
+			case "${_newSourceDescription}" in
+				help|h|\?)
+					_info "enter a description for '${_newSourceName}'"
+					_info "example: little green notebook 12 Jan 2023" 
+					_info "example: lecture notes from chem 202"
+					_info "note: the description can be changed later"
+					_info "    : multiple lines can be added later as well"
+					_info "usage: q to abort, h for this help."
+					_info "enter a description for '${_newSourceName}': "
+					;;
+				quit|q)
+					_warn "aborting; '${_newSourceName}' not added. try again later"
+					return
+					;;
+				*)
+					[[ -z ${_newSourceDescription} ]] && { _warn "empty description not allowed"; continue; } 
+					[[ ${_newSourceDescription} =~ ^[[:alnum:]] ]] || { _warn "use your words"; continue; }
+					break
+					;;
+			esac
+		done
+		# ctrl-d (eg) will break the above loop...catch it here instead
+		[[ -z ${_newSourceDescription} ]] && { _warn "empty description not allowed"; return; } 
+		while read -r -e -n1 -p "$(_ask "save '${_newSourceName}' as a new source? (y/n)") " _c; do
+			case ${_c} in
+				y)
+					_saveSource "${_newSourceName}" "${_newSourceDescription}"
+					break
+					;;
+				n)
+					return
+					;;
+				*)
+					continue
+					;;
+			esac
+		done
+		while read -r -e -n1 -p "$(_ask "set '${_newSourceName}' as current? (y/n) ") " _d; do
+			case ${_d} in
+				y)
+					_setSource "${_newSourceName}"
+					return
+					;;
+				n)
+					return
+					;;
+				*)
+					continue
+					;;
+			esac
+	done
+	}
+
+	_renameSource() {
+		local _oldName="${1}"
+		local _newName
+		_interactiveSourcePicker _newName "${1}"
+		[[ -z ${_newName:-} ]] && return
+		_id=$(_writeBlob "${_newName}")
+		_mapBlob "${_id}" "c/${_newName}/self"
+		# attributes
+		for i in $(_getKeyList "c/${_oldName}/self.*"); do
+			_blobID=$(_getBlobID "c/${1}/${i}")
+			_mapBlob "${_blobID}" "c/${_newName}/${i}"
+		done
+		# catalog
+		for c in $(_printSourceEntities "${_oldName}"); do
+			_mapBlob "${c}" "c/${_newName}/cat/${c}"
+		done
+		_setSource "${_newName}"
+		_deleteKey "c/${_oldName}/*"
+	# this can be done more efficiently with a 'git update-index --index-info'
+	# b/c doing this on 10000 entries is very very slow
+	# but it is reliable! i was able to move 10000 in a couple minutes
+	}
+
+	_interactiveSourcePicker() {
+		# smaller function...one job...pick a new source name
+		# need to modify for better variable passing
+		# arg 1 = caller's variable name
+		# arg 2 = default value [optional]
+		# ie we tell the function what variable to set
+		local __name="${1}"
+		local __default="${2:-}"
+		_validateName(){
+			# function used within fzf preview window to assist in the selection of a
+			# source name
+			local _newSourceName
+			local lengthStatus
+			local avail
+			local allowedChars="n/a"
+			local lead="n/a"
+			local last="n/a"
+			local repeat="n/a"
+			local acceptable="NO"
+			_cStat() {
+				# arg 1 = key word
+				# print the key word in a set color
+				[[ "${1}" =~ ^(YES|OK) ]] && tput setaf 2
+				[[ "${1}" =~ ^(NO|TOO) ]] && tput setaf 1
+				[[ "${1}" =~ ^(n/a) ]] && tput setaf 3
+				echo -n "${1}"
+				tput sgr0 
+			}
+			# export to fzf for --preview
+			export -f _cStat
+			# validate the name first
+			if [[ ${#1} -lt ${_minLength} ]]; then
+				lengthStatus="TOO SHORT"
+				avail="n/a"
+			elif [[ ${#1} -gt ${_maxLength} ]]; then
+				lengthStatus="TOO LONG"
+				avail="n/a"
+			else
+				lengthStatus="OK"
+				_doesKeyExist c/${1}/self && { avail="NO" ; acceptable="NO" ; } || { avail="YES" ; acceptable="YES"; }
+			fi
+			[[ "${1}" =~ ^[[:lower:]|[:digit:]] ]] && lead="YES" || { lead="NO" ; acceptable="NO" ; }
+			[[ "${1}" =~ [[:lower:]|[:digit:]]$ ]] && last="YES" || { last="NO" ; acceptable="NO" ; }
+			[[ "${1}" =~ ^([[:lower:]|[:digit:]]|[-_.])*$ ]] && allowedChars="YES" || { allowedChars="NO" ; acceptable="NO" ; }
+			[[ ! "${1}" =~ ([.]|[-]|[_]){2} ]] && repeat="YES" || { repeat="NO" ; acceptable="NO" ; }
+			# print the validation info into the fzf preview window	
+			echo "----VALID NAME?  $(_cStat ${acceptable}) --------------"
+			[[ -z "${1}" ]] && echo "waiting for input..." || echo "name: '${1}'"
+			printf "length [%.2d]: %31s\n" ${#1} "$(_cStat "${lengthStatus}")"
+			printf "unique: %36s\n" "$(_cStat "${avail}")"
+			printf "character set allowed: %21s\n" "$(_cStat "${allowedChars}")"
+			printf "first ['%s'] allowed: %23s\n" "${1:0:1}" "$(_cStat "${lead}")"
+			printf "last ['%s'] allowed: %24s\n" "${1:(-1)}" "$(_cStat "${last}")"
+			printf "no non-alpha/num repeats: %18s\n" "$(_cStat "${repeat}")"
+			echo "-----------RULES------------------"
+			echo "the name must be unique"
+			echo "max length is ${_maxLength}, min is ${_minLength}"
+			echo "lower case and numbers only"
+			echo "non alpha-numeric characters allowed:"
+			echo " - dash (-)"
+			echo " - underscore (_)"
+			echo " - dot (.)"
+			echo " ^ these cannot be first or last"
+			echo " ^ cannot be repeated (eg --)"
+			echo
+			echo "------SELECTED SOURCE DESCRIPTION------------"
+			_readKey c/${2}/self.description
+		}
+		# export above function to fzf for --preview
+		export -f _validateName
+		local _fzfFalse="fzf --bind=enter:print-query --print-query --exact "
+		local _fzfPrompt="--prompt=TYPE-NEW-NAME> --info=hidden"
+		local _fzfColor="--color=bg:#222222,preview-bg:#333333,header:yellow"
+		local _fzfHeader="--header=existing above, guidance right >"
+		local _fzfPreview="--preview=_validateName {q} {} --preview-window=50%"
+		local _fzfBack="--bind=backward-eof:change-prompt(ENTER-NEW-NAME>)"
+		local _fzfEsc="--bind=esc:clear-query"
+		# seed with 'sample' if this is the first
+		_doesKeyExist c/* || local _fzfSeed="--query=sample"
+		# seed with a name if it was provided as $2
+		[[ ${__default} ]] && local _fzfSeed="--query=$__default"	
+		# this fzf command allows us to use as a "reverse" or false finder...ie we
+		# use the fzf results to show a list from which we cannot choose one of the
+		# already existing members of the list
+		while true; do
+			_newSourceName=$(_getSourceList | ${_fzfFalse} ${_fzfBack} ${_fzfEsc} ${_fzfPrompt} ${_fzfSeed:-} "${_fzfColor}" "${_fzfHeader}" "${_fzfPreview}") || { _warn "can't do that"; return; }
+			if _isSourceNameValid "${_newSourceName}"; then
+				read -r -s -n 1 -p "$(_ask "'${_newSourceName}' is valid, create? (y/n/q) ")" _ynq
+				echo
+				[[ "${_ynq:-}" = "y" ]] && break
+				[[ "${_ynq:-}" = "q" ]] && return
+				[[ "${_ynq:-}" = "n" ]] && continue
+			else
+				_error "'${_newSourceName}' is not a valid name"
+				_ask "try again? (y/n) "
+				read -r -s -n1  _yn
+				echo
+				[[ "${_yn:-}" = "y" ]] && continue
+				[[ "${_yn:-}" = "n" ]] && return
+			fi
+		done
+		eval ${__name}=${_newSourceName}
+	}
+
+	_isSourceNameValid() {
+		# arg 1 = source name
+		if [[ "${1}" =~ ^([[:lower:]|[:upper:]|[:digit:]]|[-_.]){${_minLength},${_maxLength}}$ ]]; then
+			[[ "${1}" =~ ^[[:lower:]|[:digit:]] ]] || return 1
+			[[ "${1}" =~ [[:lower:]|[:digit:]]$ ]] || return 1
+			[[ "${1}" =~ ([.]|[-]|[_]){2} ]] && return 1
+			if _isSourceNew "${1}"; then
+				return 0
+			else
+				_warn "'${1}' is not new"
+				return 1
+			fi
+		else
+			_warn "'${1}' is not allowed, try again"
+			_warn "rules: a-z A-Z 0-9 _ - allowed; no spaces allowed"
+			_warn "rules: max length ${_maxLength} characters, min is ${_minLength}"
+			return 1
+		fi
+	}
+	_mainMenu
+}
+
+_printTagEntities() {
+	# arg 1 = source
+	git ${_git} ls-files t/*
+}
+export -f _printTagEntities
+
+_browseTags() {
+	local _fzfColor="--color=bg:#222222,preview-bg:#333333,header:yellow"
+	_view() {
+		local _path=$1
+		local _blobID=${1##*/}
+		# pipe through sed to add color to tag
+		_printBlob ${_blobID} | sed "s/^#/\x1b[32mTAG:\x1b[0m/g"
+		# need to work with batcat to see if it fits
+		#_printBlob ${_blobID} | batcat --color=always
+	}
+	export -f _view
+	local _masterTagList
+	local _meshedTagList
+	# a list of all tags with hash entries
+	_masterTagHash=$(_printTagEntities | sort -t/ -k2)
+	# a list of all tags
+	_masterTagList=$(_printTagEntities | cut -f2 -d/ | uniq)
+	# a list of all the hashes
+	_masterHashList=$(_printTagEntities | sort -t/ -k3 -u | cut -f3 -d/)
+	for _hash in $_masterHashList; do
+		#_debug "checking $_hash"
+		_tagstring=""
+		for _line in ${_masterTagHash}; do
+			#_debug " checking line $_line"
+			if [[ "${_hash}" = "${_line##*/}" ]]; then
+				#_debug "  found match: $_hash"
+				_tag=${_line%/*}
+				_tag=${_tag##*/}
+				_tagstring="${_tagstring}/${_tag}"
+				#_debug "    ${_tagstring}"
+			fi
+		done
+		_meshedTagList+=("${_tagstring}/${_hash}")
+		#_debug "## adding line to meshed list '/${_tagstring}/${_hash}'"
+	done
+	printf "%s\n" "${_meshedTagList[@]}" | sort -k1,1 -k2,2 -k3,3 | fzf ${_fzfColor} --preview-window=85% --preview '_view {}'
+}
+
+_listTags() {
+	git ${_git} ls-tree --name-only main t/ | cut -f2 -d/
+}
+
+########################
+# SEARCH
+########################
+# git --git-dir=/home/jason/studiodev/periplume/.gitdisk grep 'fuck' $(git --git-dir=/home/jason/studiodev/periplume/.gitdisk rev-list --all)
+# the above command returns the list of objects that match...nice! and snappy!
+
+_search() {
+	local _commitRange
+	local _tagList
+	local _caseSensitive=false
+	local _exactMatch=true
+	local _sourceList
+	if _isSourceSet; then
+		_currentSource=$(_getSource)
+	else
+		_currentSource="default"
+	fi
+	_cStat() {
+		# colorize true/false
+		# arg 1 = value
+		[[ "${1}" =~ ^(true) ]] && tput setaf 2
+		[[ "${1}" =~ ^(false) ]] && tput setaf 1
+		echo -n "${1}"
+		tput sgr0
+	}
+	_showMenu() {
+		echo -ne "
+
+  search commits: ${_commitRange:-latest}
+  tag list: ${yellow}${_tagList:-all}${reset}
+  case sensitive: $(_cStat ${_caseSensitive})
+  exact match: $(_cStat ${_exactMatch})
+  source list: ${cyan}${_sourceList:-${_currentSource:-all}}${reset}
+
+  s) search
+  r) set commit range
+  t) filter tag list
+  c) toggle case sensitivity
+  e) toggle exact match
+  l) set source
+  q) quit search
+
+"
+	}
+	_selectLog() {
+		local selections=$(
+			git ${_git} log --graph --format="%C(yellow)%h%C(red)%d%C(reset) - %C(bold green)(%ar)%C(reset) %s" --color=always "$@" |
+				fzf --ansi --no-sort --no-height \
+					--preview "echo {} | grep -o '[a-f0-9]\{7\}' | head -1 |
+										xargs -I@ sh -c 'git ${_git} show --color=always @'"
+			)
+			if [[ -n $selections ]]; then
+				local commits=$(echo "$selections" | sed 's/^[* |]*//' | cut -d' ' -f1 | tr '\n' ' ')
+				#git ${_git} show $commits
+				echo $commits
+			fi
+	}
+	export -f _selectLog
+	_showMenu
+	while read -r -s -n1 -p"$(_ask 'enter selection') " _selection; do
+		echo
+		case ${_selection} in
+			s)
+				#__search
+				__search "${_commitRange:-}"
+				;;
+			r)
+				_commitRange=$(_selectLog)
+				;;
+			t)
+				_tagList=$(_listTags | fzf --header="select a tag to use as a filter")
+				;;
+			c)
+				${_caseSensitive:-false} && _caseSensitive=false || _caseSensitive=true
+				;;
+			e)
+				${_exactMatch:-false} && _exactMatch=false || _exactMatch=true
+				;;
+			l)
+				_sourceList=$(_getSourceList | fzf --header="select the source to limit search within")
+				# TODO figure out how to set a list instead of a single 
+				#_sourceList=$(_getSourceList | fzf --multi --header="shift-tab for multi-select")
+				# for now, we can only limit to one source or search all sources
+				;;
+			q)
+				return
+				;;
+			esac
+		_showMenu
+	done
+}
+				
+
+__search() {
+	local _commit=${1:-HEAD}
+	local _entityList
+	local _view
+	local _fzfColor="--color=bg:#222222,preview-bg:#333333,header:yellow"
+	local _fzfOrient="--multi --bind ctrl-f:page-down,ctrl-b:page-up"
+	local _fzfPreview="--exact --preview-window=up,75%"
+	_view() {
+		local _commit=${1%%:*}
+		local _index=${1%:*}
+		local _index=${_index##*:}
+		local _blobID=${_index##*/}
+		local _query=${2}
+		echo "commit: ${_commit}"
+		echo "index: ${_index}"
+		echo "blob: ${_blobID}"
+		echo "query: ${_query}"
+		echo "==========entity============"
+		#_printBlob ${_blobID}
+		# pipe through sed to color the found query term in the preview window
+		_printBlob ${_blobID} | sed "s/${_query}/\x1b[32m${_query}\x1b[0m/g"
+	}
+	export -f _view
+	#git ${_git} grep "" $(git ${_git} rev-list --all) | fzf ${_fzfColor} ${_fzfOrient} ${_fzfPreview} --preview '_view {} {q}'
+	# this next searches needlessly through EVERY commit...way too slow
+	#git ${_git} grep "" $(git ${_git} rev-list ${_commit}) | fzf ${_fzfColor} ${_fzfOrient} ${_fzfPreview} --preview '_view {} {q}'
+	#git ${_git} grep "" ${_commit} | fzf ${_fzfColor} ${_fzfOrient} ${_fzfPreview} --preview '_view {} {q}'
+	git ${_git} grep "" ${_commit} | fzf ${_fzfColor} ${_fzfOrient} ${_fzfPreview} --preview '_view {} {q}'
+}
+
+########################
+# BROWSE
+########################
+
+# TODO build similar menu system as _source
+# allow toggle on/off for
+# source: ALL/CURRENT
+# tags: YES/NO
+
+
+_browse() {
+	# arg 1 = source
+	local _entityList
+	local _fzfColor="--color=bg:#222222,preview-bg:#333333,header:yellow"
+	_entityList=($(_printSourceEntities ${1}))
+	_debug "_browse '${1}' which has '${#_entityList[@]}' entities"
+	x=0
+	echo "==== entity $x ======="
+	_entity=$(_readKey ${_entityList[$x]}) || { _warn "nothing to see"; return; }
+	_printSourceEntities ${1}  | fzf ${_fzfColor} --preview-window=85% --exact --preview '_printBlob {}'
+}
+
+###############
+###### SHELL
+###############
+
+_shell() {
+	# enter (cd) into studio environment
+	# change the command history file
+	# change the prompt dynamically
+	cd "${_studioDir}" || { _error "can not enter studio"; return 1; }
+	HISTFILE="${_studioDir}/.germ_history"
+	HISTSIZE=1000
+	HISTFILESIZE=10000
+	HISTTIMEFORMAT="%s %F %T "
+	HISTCONTROL=ignoreboth
+	shopt -s histappend
+	set -o history
+	local _p
+	local _dirty
+	local _session="${_user}.$(date +%s)"
+	# confirm exit function
+	_confirmExit() {
+		if _isIndexClean; then
+			exit
+		else
+			_debug "index is dirty"
+			_ask "save session? press ${label}y${reset} to commit changes, ${label}n${reset} to discard changes"
+			while read -r -s -n 1  __confirm; do
+				echo # needed for newline after _ask
+				case ${__confirm} in
+					y)
+						_doCommit "[${self}] $(date) closed session: ${_session}"
+						exit
+						;;
+					n)
+						exit
+						;;
+					*)
+						_mainPrompt
+						;;
+				esac
+			done
+		fi
+	}
+	# print welcome function
+	_displayWelcome() {
+	cat <<HEREDOC
+  __  ___  ___   __  __ 
+ / _)(  _)(  ,) (  \/  )
+( (/\ ) _) )  \  )    ( 
+ \__/(___)(_)\_)(_/\/\_)
+
+germ: type ${green}help${reset} for guidance
+      type ${red}stop${reset} to leave
+
+HEREDOC
+	}
+	# print usage
+	_printShellUsage() {
+		cat << EOF
+
+  add        add a new germ entry
+  list       list the tag catalog
+  search     interactive search
+  browse     read through the current source entities
+  status     show germ health
+  inspect    run tig to inspect repo
+  s) source     add and manipulate source
+  stop       exit studio
+  help       print this message
+
+EOF
+	}
+	# main shell prompt function
+	_mainPrompt() {
+	#
+	# ignore ctrl+\ ctrl+z and ctrl+c
+	trap '' SIGQUIT SIGTSTP SIGINT SIGTERM
+	_p() {
+		# sets the prompt
+		# colors cannot derive from tput here...as 'read -e' becomes confused
+		reset=$'\001\e[0m\002'
+		red=$'\001\e[00;31m\002'
+		yellow=$'\001\e[00;33m\002'
+		green=$'\001\e[00;32m\002'
+		_cH=$'\001\e[00;45m\002'
+		_cG=$'\001\e[00;7m\002'
+		_cU=$'\001\e[00;32m\002'
+		_cS=$'\001\e[00;33m\002'
+		_dirty="${green}o${reset}"
+		_isIndexClean || _dirty="${red}-${reset}"
+		_cs=$(_getSource)
+		echo -n "${_cH}${_studioDirName}${reset}:${_cG}${_germDirName}${reset} ${_cU}${_user}${reset} [${_cS}${_cs}${reset}] ${_dirty} > "
+	}
+	local __input
+	# here...a blank line returns an empty string...BUT...if EOF is encountered
+	# then read exits because NULL is returned
+	# two things
+	# read here as above in _source...one char...and test for the things
+	# also, trap OUTSIDE of _shell, not inside...this is why read returns (i
+	# think a non-zero) which ends the while loop, or is it that read reads a char
+	# but the -z test doesn't catch it...thus the while loop passes
+	# The readline() function as called by bash will install its own signal handlers upon waiting for input from the user, and restore the original handlers upon returning; a SIGHUP while waiting for input from the user will cause it to return NULL, which will be treated as EOF by bash (in the yy_readline_get() function), before having the chance to run the deferred trap handler. 
+	# the "|| true" catches readline (read -e) from returning with NULL string,
+	# which exits the loop itself...which we do not want to do. 
+	while IFS='' read -r -d $'\n' -p "$(_p)" -e __input || true; do
+	#_debug "$(printf %s "${#__input} character ['${__input}'] "; LC_ALL=C; printf '%s\n' "made of ${#__input} byte(s) was read")"
+	#_debug "$(git ${_gitWT} --no-pager branch)"
+	#printf %s "${#__input} character ['${__input}'] "
+	#(export LC_ALL=C; printf '%s\n' "made of ${#__input} byte(s) was read")
+		history -s "${__input}"
+		if [[ -z "${__input}" ]]; then
+			true
+		elif [[ ${__input} =~ [[:cntrl:]] ]]; then
+			_warn "control char found"
+		elif [[ ${__input} == $'\e' ]]; then
+			_warn "no escape" && true
+		elif [[ "${__input}" =~ (^stop$|^quit$|^exit$|^q$) ]]; then
+			_confirmExit
+		elif [[ "${__input}" =~ (^help$|^h$|^\?$) ]]; then
+			_printShellUsage
+		elif [[ "${__input}" =~ (^list$|^l$) ]]; then
+			_listTags
+		elif [[ "${__input}" =~ (^browse$|^b$) ]]; then
+			_browse "$(_getSource)"
+		elif [[ "${__input}" =~ (^search$|^s$) ]]; then
+			_search
+		elif [[ "${__input}" =~ ^git ]]; then
+			_gitCommand=(${__input})
+			git ${_gitWT} ${_gitCommand[@]:1} || :
+		elif [[ "${__input}" =~ (^status$|^stat$) ]]; then
+			_showStatus
+			_isIndexClean || _warn "DIRTY INDEX"
+		elif [[ "${__input}" =~ (^add$|^a$) ]]; then
+			eval "${self}" "${_originalParameters}" add || true
+		elif [[ "${__input}" =~ (^source$|^s$) ]]; then
+			_source
+		else
+			# send the command (with the original command parameters) back to the
+			# calling script
+			#printf %s "${#__input} character ['${__input}'] "
+			#(export LC_ALL=C; printf '%s\n' "made of ${#__input} byte(s) was read")
+			eval "${self}" "${_originalParameters}" "${__input}" || :
+			# and if the command fails...return back to this shell prompt instead of
+			# exiting.
+			# TODO capture the $? and use it to colorize the > at the end of the
+			# _shell prompt
+		fi
+	done
+	}
+	_displayWelcome
+	_mainPrompt
+}
+
+# TODO check out 'git archive' to export files
+
+###########################
+# trap and signal catching
+###########################
+
+_irishExit() {
+	echo #to clear line...this is a bit ugly
+	# this function does not behave as desired
+  _ask "ctrl-c detected; to resume, press R, to quit, press ENTER"
+  while read -s -t 15 -n 1 _ANS; do
+		echo
+  	if [[ ${_ANS:-n} = 'R' ]]; then
+			_info "resuming"
+    	return
+  	else
+   	#_error "user requested exit with ctrl-c"
+			_error "goodbye"
+			exit 1
+		# this seems to fuck up my terminal???
+  	fi
+	done
+}
+
+main() {
+	# what are we trying to do (read all the positional parameters and set VARS)
+	_getOpts "${@}"
+	_debug "${FUNCNAME}: parameters read: ${*}"
+	_debug "${FUNCNAME}: paired-down parameters: $_workingParams"
+	_getSubcommand $_workingParams
+	_debug "${FUNCNAME}: _subCommand: ${_subCommand:-}"
+	_debug "${FUNCNAME}: remaining args: $_workingParams"
+	# setup the environment after processing all command line parameters
+	_setEnv
+	# reinitialize log functions after processing all command line options
+	_fLOG
+	# validate the environment
+	# TODO figure out a better means of knowing
+	# 1. is this an interactive shell session
+	# 2. is this part of a pipe
+	# 3. are we in our custom interactive shell (and does that matter?)
+	# set up logging and stdout stderr etc with traps
+	# possibly check for tty?
+	[[ -t 1 ]] && _debug 'STDOUT is attached to TTY'
+	[[ -t 0 ]] || _debug 'STDIN is attached to pipe'
+	[[ -p /dev/stdout ]] && _debug 'STDOUT is attached to a pipe'
+	[[ ! -t 1 && ! -p /dev/stdout ]] && _debug 'STDOUT is attached to a redirection'
+	_isEnvSufficient || { _error "cannot run until these problems are resolved"; return 1; }
+	# set the global _user vars
+	_userSet
+	# set up traps now	
+	#trap _irishExit EXIT
+	# run germ shell if no arguments
+	[ -z "${_subCommand:-}" ] && _shell
+	# ctrl-d exits out of the last command...the trap set in the _shell catches
+	# the EXIT signal, and runs.  but by now, we're toast.  ctrl-d must be caught
+	# earlier in order to be able to pass the commands back to the master script.
+	# it's a handy trick but may be unnecessary
+	# otherwise, pass the commands to the called "command"
+	_debug "now calling the eval to run '${_subCommand:-}'"
+	[ -n "${_subCommand:-}" ] && eval _"${_subCommand}" || exit
+}
+main "${@}"
