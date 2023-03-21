@@ -74,7 +74,7 @@ commands:
  install                install studio binaries
  install -d             do not ask for alternative locations
  install -s <file>      specify only one studio file
- check                  report whether studio binaries are current
+ install -f             replaces existing files (after one confirmation)
 
 EOF
 }
@@ -232,13 +232,22 @@ _installFile() {
 	else
 		if [[ -z "${_forceInstall:-}" ]]; then
 			# ask for confirmation
-			_ask "replace ${2} with file from ${_sourceDir}? [y/n] "
-			read -rsn1 _confirm; echo
-			[[ ${_confirm} = "y" ]] || { _error "file not copied"; return 1; }
-			echo "copy ${1} to ${2}"
+			if [[ -e "${2}" ]]; then
+				# file already exists
+				_ask "replace ${2} with file from ${_sourceDir}? [y/n] "
+				read -rsn1 _confirm; echo
+				[[ ${_confirm} = "y" ]] || { _error "file not copied"; return 1; }
+				#echo "copy ${red}OVER${reset} ${1} to ${2}"
+				cp "${1}" "${2}"
+			else
+				# file does not exist
+				#echo "copy ${green}NEW${reset} ${1} to ${2}"
+				cp "${1}" "${2}"
+			fi
 		else
 			# force enabled
-			echo "force copy ${1} to ${2}"
+			#echo "force copy ${1} to ${2}"
+			cp "${1}" "${2}"
 		fi
 	fi
 }
