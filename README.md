@@ -97,3 +97,20 @@ The various components in use include
 - pgp (privacy)
 - rsync (backup and restore)
 - tig (git inspection tool)
+- vipe (special editing situations)
+
+# Installation
+
+Use git to clone this repo into the location of your choosing.  
+Then run the installer script to copy the bash script files into 
+place:
+
+```
+# studio.install
+```
+
+The installer has a few options which `studio.install -h` 
+explains.
+
+The installer will report on broader dependencies but will proceed 
+without those external commands which the studio suite requires.
