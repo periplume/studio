@@ -1,0 +1,257 @@
+#!/usr/bin/env bash
+# file: studio.install
+# source: https://github.com/periplume/studio.git
+# author: jason@bloom.us
+
+# SCRIPT AND SHELL SETTINGS
+set -o errexit  # set -e
+set -o nounset
+set -o pipefail
+
+###########################
+# PREREQUISITES
+###########################
+ 
+# required commands
+hash git || { echo 'git is required'; return 1; }
+hash tput || { echo 'tput is required'; return 1; }
+
+###########################
+# ENVIRONMENT SETTINGS
+###########################
+
+# GLOBAL VARIABLES
+# these never change in the context of a session
+
+# WORKING ENVIRONMENT
+# _studioDirName is the umbrella or master namespace
+_studioDirName=studio
+selfName=$(basename $0)
+selfPath=$(readlink -f "${0}")
+selfDir=$(dirname "${selfPath}")
+
+# OUTPUT
+# some color
+red=$(tput setaf 1)
+boldred=$(tput setab 1 ; tput setaf 7)
+green=$(tput setaf 2)
+cyan=$(tput setaf 6)
+yellow=$(tput setaf 3)
+label=$(tput setab 7; tput setaf 0)
+prompt=$(tput setab 5; tput setaf 7)
+reset=$(tput sgr0)
+# these are the same as the _fLOG library functions...just hand coded here
+_ask() {
+	local _cAsk=$(tput setaf 0; tput setab 11)
+	printf '%s %s' "${_cAsk}USER${reset}" "${@}"
+}
+_info() {
+	local _cInfo=$(tput setaf 2)
+	printf '%s %s\n' "${_cInfo}INFO${reset}" "${@}"
+}
+_warn() {
+	local _cWarn=$(tput setaf 11)
+	printf '%s %s\n' "${_cWarn}WARN${reset}" "${@}"
+}
+_error() {
+	local _cError=$(tput setaf 1)
+	printf '%s %s\n' "${_cError}ERROR${reset}" "${@}"
+}
+
+####################################
+# HELPER FUNCTIONS
+####################################
+
+_printUsage () {
+  cat << EOF
+
+description: installs studio binary files from a local
+git repo into the user's HOME/bin directory
+
+usage: studio-install <command>
+
+commands:
+ install                install studio binaries
+ install -d             do not ask for alternative locations
+ install -s <file>      specify only one studio file
+ check                  report whether studio binaries are current
+
+EOF
+}
+
+####################################
+# PARAMETER PROCESSING FUNCTIONS
+####################################
+
+_getOpts () {
+	# check for global command flags and set VARS accordingly
+	local OPTIND
+	# make the original environment available to _shell for calling back into main
+	export _originalParameters=${*}
+	while getopts ":hsdlva:w:" flag ; do
+		case ${flag} in 
+			h)
+				_printUsage; exit 0
+				;;
+			?)
+				echo "invalid global option: -$OPTARG"; exit 1
+				;;
+		esac
+	done
+	shift $((OPTIND - 1))
+	# export a paired down parameter string flags and args read within this
+	# function will be discarded, leaving behind only that which the rest needs
+	export _workingParams=$*
+	return
+}
+
+_getSubcommand() {
+	# look for the first subcommand and set _subCommand accordingly
+	while ((${#})); do
+		case $1 in
+			help)
+				_printUsage; exit 0
+				;;
+			install)
+				_subCommand=$1
+				_getInstallOpts
+				return
+				;;
+			upgrade)
+				_subCommand=$1
+				_getUpgradeOpts
+				return
+				;;
+			*)
+				echo "${FUNCNAME}: '${1}' is not a subcommand"
+				return 1
+				;;
+		esac
+		shift
+	done
+}
+
+_setEnv() {
+	# set (and print) the environment
+	#_info "setting up environment now"
+	export _studioDir="$(dirname ~/.)/${_studioDirName}"
+}
+
+#################################
+# SUBCOMMAND OPTION PROCESSING
+#################################
+
+_getInstallOpts() {
+	# check for _add() flags and args
+	local OPTIND=1
+	set -- ${_workingParams}
+	shift
+	while getopts ":fds:" flag "$@"; do
+		case ${flag} in
+			d)
+				# force...ie skip the alt names inquiries
+				_justDo=true
+				;;
+			s)
+				# only do the "specific" file designated
+				_specificFile="${OPTARG}"
+				;;
+			f)
+				# force...ie replace what's there...always dangerous
+				_forceInstall=true
+				;;
+			?)
+				 echo "${FUNCNAME}: unknown flag -$OPTARG"; exit 1
+				;;
+		esac
+	done
+	shift $((OPTIND - 1))
+	export _workingParams=$*
+}
+
+# install all the files (or the specified file, with -s)
+_install() {
+	local _home
+	local _installDir
+	local _localRepo
+	# -f flag: don't ask for alternatives
+	if [ "${_justDo:-}" = true ]; then
+		_home="${HOME}"
+		_installDir="${_home}/bin"
+		_localRepo="${selfDir}"
+	else
+		_ask "enter base location for installation [${yellow}${HOME}${reset}] "
+		read _home
+		[ -z ${_home} ] && _home="${HOME}"
+		_ask "enter alt source for repo [${yellow}${selfDir}${reset}] "
+		read _localRepo
+		[ -z ${_localRepo} ] && _localRepo="${selfDir}"
+		[[ -e "${_localRepo}" ]] || { _warn "'${_localRepo}' is not found"; exit 1; }
+	fi
+	_installDir="${_home}/bin"
+	[[ ":$PATH:" == *":${_installDir}:"* ]] || _warn "${_installDir} not in PATH"
+	_info "attempting install to ${yellow}${_installDir}${reset}"
+	_info "using ${yellow}${_localRepo}${reset} as source"
+	if [[ -z "${_specificFile:-}" ]]; then
+		_info "installing full studio suite"
+	else
+		_info "installing ${_specificFile} only"
+	fi
+	if [[ -z "${_forceInstall:-}" ]]; then
+		_info "performing ${green}safe${reset} install"
+	else
+		_ask "force install requested, type capital ${boldred}F${reset} to proceed"
+		read -rsn1 _force
+		[[ ! "${_force}" = "F" ]] && { echo; _error "confirmation required"; exit 1; } || echo
+		_warn "performing ${red}unsafe${reset} force install"
+	fi
+	[[ -d "${_home}" ]] || { _error "'${_home}' does not exist"; exit 1; }
+	[[ -w "${_home}" ]] || { _error "'${_home}' is not writable"; exit 1; }
+	[[ -e "${_localRepo}/bin" ]] || { _error "'${_localRepo}' does not contain bin/"; exit 1; }
+	[[ -e "${_installDir}" ]] || mkdir "${_installDir}"
+	if [[ -z "${_specificFile:-}" ]]; then
+		# doing the full suite
+		for _file in $(ls "${_localRepo}/bin"); do
+			_installFile "${_localRepo}/bin/${_file}" "${_installDir}/${_file}"
+		done
+	else
+		# doing just one file
+		_installFile "${_localRepo}/bin/${_specificFile}" "${_installDir}/${_specificFile}"
+	fi
+}
+
+# copy wrapper with safeguards
+_installFile() {
+	# arg 1 = source
+	# arg 2 = dest
+	local _confirm
+	local _sourceDir="$(dirname $1)"
+	# don't bother if files are the same
+	if cmp --silent "${1}" "${2}"; then
+		_info "${1} and ${2} are identical"
+	else
+		if [[ -z "${_forceInstall:-}" ]]; then
+			# ask for confirmation
+			_ask "replace ${2} with file from ${_sourceDir}? [y/n] "
+			read -rsn1 _confirm; echo
+			[[ ${_confirm} = "y" ]] || { _error "file not copied"; return 1; }
+			echo "copy ${1} to ${2}"
+		else
+			# force enabled
+			echo "force copy ${1} to ${2}"
+		fi
+	fi
+}
+
+main() {
+	# what are we trying to do (read all the positional parameters and set VARS)
+	_getOpts "${@}"
+	_getSubcommand $_workingParams
+	# setup the environment after processing all command line parameters
+	_setEnv
+	# run germ shell if no arguments
+	[ -z "${_subCommand:-}" ] && _printUsage
+	# otherwise, run the called command
+	[ -n "${_subCommand:-}" ] && eval _"${_subCommand}" || exit
+}
+main "${@}"
