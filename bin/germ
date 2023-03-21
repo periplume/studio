@@ -1420,7 +1420,7 @@ _source() {
 	if [[ ${_currentSource} = "default" ]]; then
 		_displaySource="${yellow}default${reset}"
 	else
-		_displaySource="${green}${_currentSource}${reset}"
+		_displaySource="${yellow}${_currentSource}${reset}"
 	fi
 	_sc=$(_getSourceCount ${_currentSource})
 	if [[ ${_sc} = 0 ]]; then

@@ -251,6 +251,7 @@ commands:
  edit                edit an existing letter
  print               print a letter to send
  list                list the letters per state 
+ mark                mark the status of a letter (as sent, etc)
  inspect             run tig on the epistle repo
  sizer               run github sizer tool on epistle repo 
  import              import files into the repo
