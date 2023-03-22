@@ -1,0 +1,402 @@
+#!/usr/bin/env bash
+# file: studio
+# source: https://github.com/periplume/studio.git
+# author: jason@bloom.us
+# SCRIPT AND SHELL SETTINGS
+set -o errexit  # set -e
+set -o nounset
+set -o pipefail
+
+###########################
+# LIBRARY SOURCES
+###########################
+
+source studio-lib.sh
+
+
+###########################
+# PREREQUISITES
+###########################
+ 
+# required commands
+_requiredCommands=(git gitdisk dsink vipe fzf)
+
+# recommended commands
+_recommendedCommands=(git-sizer tig)
+
+###########################
+# ENVIRONMENT SETTINGS
+###########################
+
+# GLOBAL VARIABLES
+# these never change in the context of a session
+# these will be exported (in the case of fzf previews etc) 
+
+# WORKING ENVIRONMENT
+# _studioDirName is the working environment (typically in $HOME)
+_studioDirName=studio
+# get the name of the script itself
+self=$(basename $0)
+
+# USER NAME
+# the git username and email are used to create a short hash which identifies
+# the user in the namespace.  it is set as a global variable and used in various
+# places.  it can be overridden here.
+#_user=e291
+
+# BEHAVIOR
+
+# debugging and logging settings
+# script debug toggle (set to true to enable default global debugging)
+_DEBUG=false
+# silent mode for scripting (supresses all output)
+_SILENT=false
+# logging facility
+_LOG=false
+
+####################################
+# HELPER FUNCTIONS
+####################################
+
+_printUsage () {
+  cat << EOF
+
+usage: studio [OPTIONS] <command> [OPTIONS]
+${red}NEEDS FIXING${reset}
+
+options:
+ -h      print this usage info
+ -l      log commands and debug info to log file
+ -d      print debug info to stdout and/or log
+ -s      suppress all stdout/stderr
+ -v      print version number and exit
+
+alternate env settings:
+ -a <name>  set the germ dir name to <name>
+ -w <name>  set the master studio dir to <name> (assumes \$HOME/<name>)
+
+commands:
+ add                 add a new germ entry to the database
+ edit                edit an existing germ entry
+ create              create a new germ git database
+ inspect             run tig on the germ git bare repo
+ sizer               run github sizer tool on germ git bare repo
+
+EOF
+}
+
+_printInfo () {
+  cat << EOF
+
+studio needs explaining in a few words
+
+EOF
+}
+
+####################################
+# PARAMETER PROCESSING FUNCTIONS
+####################################
+
+_getOpts () {
+	# check for global command flags and set VARS accordingly
+	local OPTIND
+	# make the original environment available to _shell for calling back into main
+	export _originalParameters=${*}
+	_debug "${FUNCNAME}: positional parameters read: $*"
+	while getopts ":hsdlva:w:" flag ; do
+		_debug "${FUNCNAME}: OPTIND=$OPTIND flag=$flag"
+		case ${flag} in 
+			h)
+				_printInfo ; _printUsage; exit 0
+				;;
+			a)
+				export _germDirName=$OPTARG
+				# TODO find a better way of avoiding using key words as OPTARGs
+				[[ $OPTARG =~ add|edit|create|print ]] && { _error "'$OPTARG' not allowed as name for -$flag"; exit 1; }
+				_debug "using alternative germ name '$_germDirName'"
+				;;
+			w)
+				export _studioDirName=$OPTARG
+				[[ $OPTARG =~ add|edit|create|print ]] && { _error "'$OPTARG' not allowed as name for -$flag"; exit 1; }
+				_debug "using alternative studio name '$_studioDirName'"
+				;;
+ 	    s)
+				_debug "${FUNCNAME}: enabling silent mode with flag -$flag"
+ 	      export _SILENT=true
+				;;
+			d)
+				_debug "${FUNCNAME}: enabled debug mode with flag -$flag"
+				export _DEBUG=true
+				;;
+			l)
+				_debug "${FUNCNAME}: enabled log mode with flag -$flag"
+				export _LOG=true
+				;;
+			v)
+				_info "${green}verion${reset}: beta"; exit 0
+				;;
+			?)
+				_error "invalid global option: -$OPTARG"; exit 1
+				;;
+		esac
+	done
+	shift $((OPTIND - 1))
+	# export a paired down parameter string flags and args read within this
+	# function will be discarded, leaving behind only that which the rest needs
+	export _workingParams=$*
+	_debug "${FUNCNAME}: _LOG=${_LOG}"
+	_debug "${FUNCNAME}: _SILENT=${_SILENT}"
+	_debug "${FUNCNAME}: _DEBUG=${_DEBUG}"
+	return
+}
+
+_getSubcommand() {
+	# look for the first subcommand and set _subCommand accordingly
+	while ((${#})); do
+		_debug "${FUNCNAME}: reading parameter '${1}'"
+		case $1 in
+			help)
+				_printInfo ; _printUsage; exit 0
+				;;
+			status)
+				_debug "${FUNCNAME}: '$1' called, checking for $1 flags now"
+				_subCommand=$1
+				#_getStatusOpts
+				return
+				;;
+			test)
+				_subCommand=$1
+				return
+				;;
+			*)
+				_error "${FUNCNAME}: '${1}' is not a subcommand"
+				return 1
+				;;
+		esac
+		shift
+	done
+}
+
+_setEnv() {
+	# set (and print) the environment
+	#_info "setting up environment now"
+	export _studioDir="$(dirname ~/.)/${_studioDirName}"
+	export _logFile="${_studioDir}/studio.log"
+	[[ -f "${_logFile}" ]] && _canLog=true || _canLog=false
+	export _canLog
+	_debug "self=$self"
+	_debug "_studioDirName=$_studioDirName"
+	_debug "_studioDir=$_studioDir"
+	_debug "_logFile=$_logFile"
+	_debug "git version= $(git $_git -v)"
+	_debug "_canLog=${_canLog:-false}"
+	_debug "_user=${_user:-unset}"
+	_debug "_DEBUG=$_DEBUG"
+	_debug "_SILENT=$_SILENT"
+	_debug "_LOG=$_LOG"
+}
+
+_isEnvSufficient() {
+	# check for required tools, report accordingly
+	# TODO add recommended checks with _missing{0:name,1:name}
+	local _sufficient=true
+	for _required in "${_requiredCommands[@]}"; do
+		if ! hash "${_required}" 2>/dev/null; then
+			_warn "${FUNCNAME}: ${_required} not found"
+			_sufficient=false
+		else
+			_debug "${FUNCNAME}: ${_required} found"
+		fi
+	done
+	# check for germ dir (unless we are running create)
+	if [ ! -d "${_germDir}" ]; then
+		if [ -z "${_subCommand:-}" ]; then
+			_error "found no ${_germDir}; run 'germ create' first"
+		 	return 1
+		elif [ ! ${_subCommand:=} = "create" ]; then
+			_error "found no ${_germDir}; run 'germ create' first"
+			_sufficient=false
+		fi
+	fi
+	[ ${_sufficient} = true ] && return 0 || return 1
+}
+
+#################################
+# SUBCOMMAND OPTION PROCESSING
+#################################
+
+_getAddOpts() {
+	# check for _add() flags and args
+	local OPTIND=1
+	set -- ${_workingParams}
+	_debug "${FUNCNAME}: positional parameters read: $*"
+	shift
+	while getopts ":ib" flag "$@"; do
+		case ${flag} in
+			i)
+				# inline add (no editor invoked)
+				_debug "enabled inline mode"
+				_inline=true
+				;;
+			b)
+				# bulk add disables commit...this is a hack
+				_debug "bulk add operation"
+				_bulk=true
+				;;
+			?)
+				 _error "${FUNCNAME}: unknown flag -$OPTARG"; exit 1
+				;;
+		esac
+	done
+	shift $((OPTIND - 1))
+	export _workingParams=$*
+}
+
+###############
+###### SHELL
+###############
+
+_shell() {
+	# enter (cd) into studio environment
+	# change the command history file
+	# change the prompt dynamically
+	cd "${_studioDir}" || { _error "can not enter studio"; return 1; }
+	HISTFILE="${_studioDir}/.studio_history"
+	HISTSIZE=1000
+	HISTFILESIZE=10000
+	HISTTIMEFORMAT="%s %F %T "
+	HISTCONTROL=ignoreboth
+	shopt -s histappend
+	set -o history
+	local _p
+	local _dirty
+	local _session="${_user}.$(date +%s)"
+	# confirm exit function
+	_displayWelcome() {
+	cat <<HEREDOC
+
+**STUDIO**
+
+studio: type ${green}help${reset} for guidance
+        type ${red}stop${reset} to leave
+
+HEREDOC
+	}
+	_printShellUsage() {
+		cat << EOF
+
+${green}add function to display menu${reset}
+
+  status     show germ health
+  inspect    run tig to inspect repo
+  source     add and manipulate source
+  stop       exit studio
+  help       print this message
+
+EOF
+	}
+	# main shell prompt function
+	_mainPrompt() {
+	#
+	# ignore ctrl+\ ctrl+z and ctrl+c
+	trap '' SIGQUIT SIGTSTP SIGINT SIGTERM
+	_p() {
+		# sets the prompt
+		# colors cannot derive from tput here...as 'read -e' becomes confused
+		reset=$'\001\e[0m\002'
+		red=$'\001\e[00;31m\002'
+		yellow=$'\001\e[00;33m\002'
+		green=$'\001\e[00;32m\002'
+		_cH=$'\001\e[00;45m\002'
+		_cG=$'\001\e[00;7m\002'
+		_cU=$'\001\e[00;32m\002'
+		_cS=$'\001\e[00;33m\002'
+		_dirty="${green}o${reset}"
+		_isIndexClean || _dirty="${red}-${reset}"
+		_cs=$(_getSource)
+		echo -n "${_cH}${_studioDirName}${reset}:${_cU}${_user}${reset} [${_cS}${_cs}${reset}] ${_dirty} > "
+	}
+	local __input
+	while IFS='' read -r -d $'\n' -p "$(_p)" -e __input || true; do
+		history -s "${__input}"
+		if [[ -z "${__input}" ]]; then
+			true
+		elif [[ ${__input} =~ [[:cntrl:]] ]]; then
+			_warn "control char found"
+		elif [[ ${__input} == $'\e' ]]; then
+			_warn "no escape" && true
+		elif [[ "${__input}" =~ (^stop$|^quit$|^exit$|^q$) ]]; then
+			_confirmExit
+		elif [[ "${__input}" =~ (^help$|^h$|^\?$) ]]; then
+			_printShellUsage
+		elif [[ "${__input}" =~ (^list$|^l$) ]]; then
+			_listTags
+		elif [[ "${__input}" =~ (^browse$|^b$) ]]; then
+			_browse "$(_getSource)"
+		elif [[ "${__input}" =~ (^search$|^s$) ]]; then
+			_search
+		elif [[ "${__input}" =~ ^git ]]; then
+			_gitCommand=(${__input})
+			git ${_gitWT} ${_gitCommand[@]:1} || :
+		elif [[ "${__input}" =~ (^status$|^stat$) ]]; then
+			_showStatus
+			_isIndexClean || _warn "DIRTY INDEX"
+		elif [[ "${__input}" =~ (^add$|^a$) ]]; then
+			eval "${self}" "${_originalParameters}" add || true
+		elif [[ "${__input}" =~ (^source$|^s$) ]]; then
+			_source
+		else
+			# send the command (with the original command parameters) back to the
+			# calling script
+			#printf %s "${#__input} character ['${__input}'] "
+			#(export LC_ALL=C; printf '%s\n' "made of ${#__input} byte(s) was read")
+			eval "${self}" "${_originalParameters}" "${__input}" || :
+			# and if the command fails...return back to this shell prompt instead of
+			# exiting.
+			# TODO capture the $? and use it to colorize the > at the end of the
+			# _shell prompt
+		fi
+	done
+	}
+	_displayWelcome
+	_mainPrompt
+}
+
+
+main() {
+	# what are we trying to do (read all the positional parameters and set VARS)
+	_getOpts "${@}"
+	_debug "${FUNCNAME}: parameters read: ${*}"
+	_debug "${FUNCNAME}: paired-down parameters: $_workingParams"
+	_getSubcommand $_workingParams
+	_debug "${FUNCNAME}: _subCommand: ${_subCommand:-}"
+	_debug "${FUNCNAME}: remaining args: $_workingParams"
+	# setup the environment after processing all command line parameters
+	_setEnv
+	# reinitialize log functions after processing all command line options
+	_fLOG
+	# validate the environment
+	# TODO figure out a better means of knowing
+	# 1. is this an interactive shell session
+	# 2. is this part of a pipe
+	# 3. are we in our custom interactive shell (and does that matter?)
+	# set up logging and stdout stderr etc with traps
+	# possibly check for tty?
+	[[ -t 1 ]] && _debug 'STDOUT is attached to TTY'
+	[[ -t 0 ]] || _debug 'STDIN is attached to pipe'
+	[[ -p /dev/stdout ]] && _debug 'STDOUT is attached to a pipe'
+	[[ ! -t 1 && ! -p /dev/stdout ]] && _debug 'STDOUT is attached to a redirection'
+	_isEnvSufficient || { _error "cannot run until these problems are resolved"; return 1; }
+	# set the global _user vars
+	_userSet
+	# run germ shell if no arguments
+	[ -z "${_subCommand:-}" ] && _shell
+	# ctrl-d exits out of the last command...the trap set in the _shell catches
+	# the EXIT signal, and runs.  but by now, we're toast.  ctrl-d must be caught
+	# earlier in order to be able to pass the commands back to the master script.
+	# it's a handy trick but may be unnecessary
+	# otherwise, pass the commands to the called "command"
+	_debug "now calling the eval to run '${_subCommand:-}'"
+	[ -n "${_subCommand:-}" ] && eval _"${_subCommand}" || exit
+}
+main "${@}"
