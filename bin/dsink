@@ -1,19 +1,7 @@
 #!/usr/bin/env bash
 # file: dsink
-# source: https://github.com/periplume/dotfiles.git
+# source: https://github.com/periplume/studio.git
 # author: jason@bloom.us
-
-# TO MY FUTURE SELF
-# WHOSE MEMORY WILL STRUGGLE TO REMEMBER HOW THIS THING WORKS
-# TOC MORE OR LESS:
-# SCRIPT AND SHELL SETTINGS
-# ENVIRONMENT SETTINGS
-# DEFAULTS
-# BASIC LOGGING FUNCTIONS
-# HELPER FUNCTIONS
-# PARAMETER PROCESSING FUNCTIONS
-# SUBCOMMAND FUNCTIONS AND SUBFUNCTIONS
-# MAIN ENTRY AND CONTROL
 
 # SCRIPT AND SHELL SETTINGS
 
@@ -38,15 +26,19 @@ _SILENT=false
 # logging facility (debug always goes here, unless)
 _LOG=true
 
-# some color
-red=$(tput setaf 1)
-boldred=$(tput bold; tput setaf 1)
-green=$(tput setaf 2)
-cyan=$(tput setaf 6)
-yellow=$(tput setaf 3)
-prompt=$(tput setab 5; tput setaf 7)
-reset=$(tput sgr0)
-label=$(tput setab 7; tput setaf 0)
+###########################
+# LIBRARY SOURCES
+###########################
+
+source studio-lib.sh
+
+###########################
+# LOGGING AND CONSOLE
+###########################
+
+_fLOG
+# the log/console functions instantited now will be re-initialized after all the
+# command line parameters are processed
 
 # DEFAULT SETTINGS
 
@@ -61,75 +53,6 @@ _dsinkMount="${_dsinkDir}/mount"
 
 # global variables we use
 # _findNewDisk: declare -g _newDiskDevice
-
-_prompt() {
-	# hack to avoid fixing _log and include a PROMPT type
-	# TODO: add this idea into _log to keep the "universal" claim
-	echo -n "${prompt}USER${reset}: ${1} "
-}
-
-# LOGGING 
-
-_log() {
-	# global prompt and logging function
-	# consults _DEBUG _SILENT and _LOG for behavior
-	# TODO: add type for user PROMPT (ie USER interaction)
-	# TODO: try and optimize...many calls for each log event (although the use
-	# would never be bogged down since this is a single user system)
-	# levels:
-	# 0=debug eg: _log 0 "func(): value x was found and changed into x2"
-	# 1=info eg: _log 1 "main(): set parameters to x y and z"
-	# 2=warn eg: _log 2 "func(): doing y because the force flag was set"
-	# 3=error eg: _log 3 "main(): non-fatal error, will continue trying"
-	# 4=fatal eg: _log 4 "main(): fatal error, quitting"
-	# ARG1 = log level (can be overridden by setting _logLevelOverride)
-	# prints 1-3 no matter what, unless _LOG is false and/or _SILENT is true (and
-	# there are functions (eg _format) that should never be SILENT)
-	# set to 0 to force all logs into DEBUG pipeline
-	local _logLevelOverride=
-	local _logLevel=${_logLevelOverride:-$1}
-	local _logMessage="${@:2}"
-	local _canLog=false
-	# set timestamp for log message (unix seconds)
-	local _timeStamp=$(date +%s)
-	# define log levels and colors
-	# TODO: fix this...not using it as designed
-	declare -A _i=([0]=DEBUG [1]=INFO [2]=WARN [3]=ERROR [4]=FATAL)
-	declare -A _c=([0]=cyan [1]=green [2]=yellow [3]=red [4]=boldred)
-	local _level=${_i[${_logLevel}]}
-	local _color=${_c[${_logLevel}]}
-	# check if a logfile exists
-	# this could be a global VAR
-	[ -f "${_logFile}" ] && _canLog=true
-	# if debug is false and message level is 0, stop
-	[  ${_DEBUG} = false ] && [ ${_logLevel} = 0 ] && return
-	# if _LOG is true and _logFile exists, print to log
-	[ ${_LOG} = true ] && [ ${_canLog} = true ] && \
-		 printf "%s\n" "${_timeStamp} ${_level}: ${_logMessage}" >> "${_logFile}"
-	# if silent is true, don't print anything to the console and stop
-	# BUG HERE
-	# if SILENT is true and _log = 4, then we don't exit as expected on FATAL
-	# error
-	if [ ${_SILENT} = true ] && [ ${_logLevel} = 4 ]; then
-		exit 1
-	elif [ ${_SILENT} = true ]; then
-		return
-	fi
-	# if _SILENT is false, prettyPrint to console based on level
-	if [ ! ${_SILENT} = true ]; then
-		[ ${_DEBUG} = true ] && [ ${_logLevel} = 0 ]  && \
-			echo "${cyan}DEBUG${reset}: ${_logMessage}" && return
-		[ ${_logLevel} = 1 ] && \
-			echo "${green}INFO${reset}: ${_logMessage}" && return
-		[ ${_logLevel} = 2 ] && \
-			echo "${yellow}WARN${reset}: ${_logMessage}" && return
-		[ ${_logLevel} = 3 ] && \
-			echo "${red}ERROR${reset}: ${_logMessage}" && return
-		[ ${_logLevel} = 4 ] && \
-			echo "${boldred}FATAL${reset}: ${_logMessage}" && exit 1
-	fi
-}
-
 
 # HELPER FUNCTIONS
 
@@ -174,24 +97,24 @@ EOF
 _getOpts () {
 	# check for global command flags and set VARS accordingly
 	local OPTIND
-	_log 0 "${FUNCNAME[0]}: positional parameters read: $*"
+	_debug "${FUNCNAME[0]}: positional parameters read: $*"
 	while getopts ":hsdlv" flag ; do
-		_log 0 "${FUNCNAME[0]}: OPTIND=$OPTIND flag=$flag"
+		_debug "${FUNCNAME[0]}: OPTIND=$OPTIND flag=$flag"
 		case ${flag} in 
 			h)
 				_printInfo ; _printUsage; exit 0
 				;;
  	    s)
-				_log 0 "${FUNCNAME[0]}: enabling silent mode"
+				_debug "${FUNCNAME[0]}: enabling silent mode"
  	      _SILENT=true
 				;;
 			d)
 				_DEBUG=true
-				_log 0 "${FUNCNAME[0]}: enabled debug mode"
+				_debug "${FUNCNAME[0]}: enabled debug mode"
 				;;
 			l)
 				_LOG=true
-				_log 0 "${FUNCNAME[0]}: enabled log mode"
+				_debug "${FUNCNAME[0]}: enabled log mode"
 				;;
 			v)
 				echo "${green}verion${reset}: beta"; exit 0
@@ -205,65 +128,66 @@ _getOpts () {
 	# export a paired down parameter string flags and args read within this
 	# function will be discarded, leaving behind only that which the rest needs
 	export _workingParams=$*
-	_log 0 "${FUNCNAME[0]}: _LOG=${_LOG}"
-	_log 0 "${FUNCNAME[0]}: _SILENT=${_SILENT}"
-	_log 0 "${FUNCNAME[0]}: _DEBUG=${_DEBUG}"
+	_debug "${FUNCNAME[0]}: _LOG=${_LOG}"
+	_debug "${FUNCNAME[0]}: _SILENT=${_SILENT}"
+	_debug "${FUNCNAME[0]}: _DEBUG=${_DEBUG}"
 	return
 }
 
 _getSubcommand() {
 	# look for the first subcommand and set _subCommand accordingly
 	while ((${#})); do
-		_log 0 "${FUNCNAME[0]}: reading parameter '${1}'"
+		_debug "${FUNCNAME[0]}: reading parameter '${1}'"
 		case $1 in
 			help)
 				_printInfo ; _printUsage; exit 0
 				;;
 			backup)
-				_log 0 "${FUNCNAME[0]}: '$1' called, checking for backup flags now"
+				_debug "${FUNCNAME[0]}: '$1' called, checking for backup flags now"
 				_subCommand=$1
 				_getBackupOpts
 				return
 				;;
 			restore)
-				_log 0 "_getSubcommand(): '$1' called, check for restore flags"
+				_debug "_getSubcommand(): '$1' called, check for restore flags"
 				_subCommand=$1
 				return
 				;;
 			format)
-				_log 0 "_getSubcommand(): '$1' called, check for format flags"
+				_debug "_getSubcommand(): '$1' called, check for format flags"
 				_subCommand=$1
 				_getFormatOptions
 				return
 				;;
 			mount)
-				_log 0 "_getSubcommand(): '$1' called, check for mirror flags"
+				_debug "_getSubcommand(): '$1' called, check for mirror flags"
 				_subCommand=$1
 				return
 				;;
 			unmount)
-				_log 0 "_getSubcommand(): '$1' called, check for mirror flags"
+				_debug "_getSubcommand(): '$1' called, check for mirror flags"
 				_subCommand=$1
 				return
 				;;
 			status)
-				_log 0 "_getSubcommand(): '$1' called, check for mirror flags"
+				_debug "_getSubcommand(): '$1' called, check for mirror flags"
 				_subCommand=$1
+				_getStatusOptions
 				return
 				;;
 			report)
-				_log 0 "_getSubcommand(): '$1' called, check for mirror flags"
+				_debug "_getSubcommand(): '$1' called, check for mirror flags"
 				_subCommand=$1
 				return
 				;;
 			test)
-				_log 0 "_getSubcommand(): '$1' called, check for format flags"
+				_debug "_getSubcommand(): '$1' called, check for format flags"
 				_subCommand=$1
 				_getTestOptions
 				return
 				;;
 			*)
-				_log 4 "_getSubcommand(): '$1' is not a subcommand"
+				_error "_getSubcommand(): '$1' is not a subcommand"
 				;;
 		esac
 		shift
@@ -277,14 +201,14 @@ _isEnvSufficient() {
 	local _sufficient=true
 	for _required in "${_requiredCommands}"; do
 		if ! hash "${_required}" 2>/dev/null; then
-			_log 3 "${FUNCNAME[0]}: ${_required} not found"
+			_error "${FUNCNAME[0]}: ${_required} not found"
 			_sufficient=false
 		fi
 	done
 	# check for dsink dir
 	if [ ! -d "${_dsinkDir}" ]; then
-		_log 2 "${FUNCNAME[0]}: no ${_dsinkDir}, creating now"
- 		mkdir -p "${_dsinkMount}" || _log 4 "${FUNCNAME[0]}: cannot make ${_dsinkDir}"
+		_warn "${FUNCNAME[0]}: no ${_dsinkDir}, creating now"
+ 		mkdir -p "${_dsinkMount}" || _error "${FUNCNAME[0]}: cannot make ${_dsinkDir}"
 		touch "${_dsinkConf}" "${_logFile}"
 		mkdir -p "${_dsinkCatalog}"
 		mkdir -p "${_dsinkMedia}"
@@ -292,23 +216,22 @@ _isEnvSufficient() {
 	[ ${_sufficient} = true ] && return 0 || return 1
 }
 
-
 # SUBCOMMAND FUNCTIONS AND SUBFUNCTIONS
 _getBackupOpts() {
 	# check for backup flags and args
 	local OPTIND=1
 	set -- ${_workingParams}
-	_log 0 "${FUNCNAME[0]}: positional parameters read: $*"
+	_debug "${FUNCNAME[0]}: positional parameters read: $*"
 	shift
 	while getopts ":r" flag "$@"; do
 		case ${flag} in
 			r)
 				# future option to use when we want to do an rsync force refresh, eg
 				_refresh=true
-				_log 1 "${FUNCNAME[0]}: refresh mode enabled"
+				_info "${FUNCNAME[0]}: refresh mode enabled"
 				;;
 			?)
-				_log 3 "${FUNCNAME[0]}: unknown flag -$OPTARG"; exit 1
+				_error "${FUNCNAME[0]}: unknown flag -$OPTARG"; exit 1
 				;;
 		esac
 	done
@@ -319,16 +242,16 @@ _getBackupOpts() {
 _getFormatOptions() {
 	local OPTIND=1
 	set -- ${_workingParams}
-	_log 0 "${FUNCNAME[0]}: positional parameters read: $*"
+	_debug "${FUNCNAME[0]}: positional parameters read: $*"
 	shift
 	while getopts ":f" flag "$@"; do
 		case ${flag} in
 			f)
 				_forceFormat=true
-				_log 1 "${FUNCNAME[0]}: force mode enabled"
+				_info "${FUNCNAME[0]}: force mode enabled"
 				;;
 			?)
-				_log 3 "${FUNCNAME[0]}: unknown flag -$OPTARG"; exit 1
+				_error "${FUNCNAME[0]}: unknown flag -$OPTARG"; exit 1
 				;;
 		esac
 	done
@@ -339,16 +262,16 @@ _getFormatOptions() {
 _getTestOptions() {
 	local OPTIND=1
 	set -- ${_workingParams}
-	_log 0 "${FUNCNAME[0]}: positional parameters read: $*"
+	_debug "${FUNCNAME[0]}: positional parameters read: $*"
 	shift
 	while getopts ":f" flag "$@"; do
 		case ${flag} in
 			f)
 				_forceFormat=true
-				_log 1 "${FUNCNAME[0]}: force mode enabled"
+				_info "${FUNCNAME[0]}: force mode enabled"
 				;;
 			?)
-				_log 3 "${FUNCNAME[0]}: unknown flag -$OPTARG"; exit 1
+				_error "${FUNCNAME[0]}: unknown flag -$OPTARG"; exit 1
 				;;
 		esac
 	done
@@ -356,6 +279,25 @@ _getTestOptions() {
 	export _workingParams=$*
 }
 	
+_getStatusOptions() {
+	local OPTIND=1
+	set -- ${_workingParams}
+	_debug "${FUNCNAME[0]}: positional parameters read: $*"
+	shift
+	while getopts ":m" flag "$@"; do
+		case ${flag} in
+			m)
+				_checkMount && _getMountedName || return 1
+				exit 0
+				;;
+			?)
+				_error "${FUNCNAME[0]}: unknown flag -$OPTARG"; exit 1
+				;;
+		esac
+	done
+	shift $((OPTIND - 1))
+	export _workingParams=$*
+}
 
 # SUB COMMANDS
 #backup              synchronize defined local contents to mounted usb
@@ -368,46 +310,48 @@ _getTestOptions() {
 
 _backup() {
 	# rsync from local source to mounted usb destination
-	echo "backup from here to usb happening..."
+	_checkMount || { _warn "dsink usb device not mounted"; return 1; }
 	_rsyncDest="${_dsinkMount}"/rsync/
 	echo "backup from $HOME/studio to ${_rsyncDest}"
 	rsync -a $HOME/studio/ "${_rsyncDest}"
+	_info "backup from $HOME/studio to ${_rsyncDest} complete"
 }
 
 _format() {
-	_findNewDisk || _log 4 "no new disk found" && _log 1 "found ${_newDiskDevice}"
+	_findNewDisk || _error "no new disk found" && _info "found ${_newDiskDevice}"
 	_printDiskInfo "${_newDiskDevice}"
-	_prompt "is ${green}${_newDiskDevice}${reset} the desired disk? [type YES to proceed] "
+	#_prompt "is ${green}${_newDiskDevice}${reset} the desired disk? [type YES to proceed] "
+	_ask "is ${green}${_newDiskDevice}${reset} the desired disk? [type YES to proceed] "
 	read -r -s -t 15 -n 3 _YES ; echo
 	if [[ "${_YES}" != "YES" ]]; then
-		_log 4 "uppercase YES is required, try again"
+		_error "uppercase YES is required, try again"
 	fi
 	local _newDsinkDisk="${_newDiskDevice}"
 	local _newDsinkDiskPartition="${_newDsinkDisk}1"
-	_doWritePartition "${_newDsinkDisk}" || _log 4 "failed to write partition on ${1}"
-	_ptuuid=$(_getPTUUID ${_newDsinkDisk}) || _log 4 "could not get disk id"
+	_doWritePartition "${_newDsinkDisk}" || _error "failed to write partition on ${1}"
+	_ptuuid=$(_getPTUUID ${_newDsinkDisk}) || _error "could not get disk id"
 	if [ -d "${_dsinkCatalog}"/media/"${_ptuuid:0:3}" ]; then
 		# disk id already exists
-		_log 3 "disk id ${_ptuuid:0:3} collided"
+		_error "disk id ${_ptuuid:0:3} collided"
 		while [ -d "${_dsinkCatalog}"/media/"${_ptuuid:0:3}" ]; do
-			_doWritePartition "${_newDsinkDisk}" _log 4 "failed to rewrite partition with unique id on ${1}"
+			_doWritePartition "${_newDsinkDisk}" _error "failed to rewrite partition with unique id on ${1}"
 		done
 	fi
-	_log 0 "ptuuid=${_ptuuid}"
-	_log 0 "disk id is ${_ptuuid:0:3}"
+	_debug "ptuuid=${_ptuuid}"
+	_debug "disk id is ${_ptuuid:0:3}"
 	mkdir "${_dsinkCatalog}"/media/"${_ptuuid:0:3}"
 	touch "${_dsinkCatalog}"/media/"${_ptuuid:0:3}"/"${_ptuuid:3}"
-	_isDeviceReady "${_newDsinkDisk}" || _log 4 "${_newDsinkDevice} not ready"
+	_isDeviceReady "${_newDsinkDisk}" || _error "${_newDsinkDevice} not ready"
 	# note: waiting on devices is tricky
 	# watch -n0.1 -be ls -l /dev/sda1
-	_isDeviceReady "${_newDsinkDisk}"1 || _log 4 "${_newDsinkDisk}1 not ready"
-	_log 1 "encrypting ${_newDsinkDisk}1 now..."
+	_isDeviceReady "${_newDsinkDisk}"1 || _error "${_newDsinkDisk}1 not ready"
+	_info "encrypting ${_newDsinkDisk}1 now..."
 	_doEncrypt "${_newDsinkDisk}"1 && touch "${_dsinkCatalog}"/media/"${_ptuuid:0:3}"/encrypted
-	_log 1 "writing filesystem now..."
+	_info "writing filesystem now..."
 	_doMakeFS && touch "${_dsinkCatalog}"/media/"${_ptuuid:0:3}"/ready
 	_mount && touch "${_dsinkCatalog}"/media/"${_ptuuid:0:3}"/mounted
-	_log 1 "dsink device is ready and mounted"
-	_log 1 "label new dsink device as ${label}${_ptuuid:0:3}${reset} now"
+	_info "dsink device is ready and mounted"
+	_info "label new dsink device as ${label}${_ptuuid:0:3}${reset} now"
 }
 
 # disk media catalog
@@ -431,16 +375,16 @@ _doEncrypt() {
 	# arg 1 = partition (eg /dev/sda1)
 	# encrypt the device with luks, then open the device
 	sudo cryptsetup luksFormat --verify-passphrase --batch-mode ${1}
-	_log 1 "${1} encrypted, opening the device..."
+	_info "${1} encrypted, opening the device..."
 	sudo cryptsetup luksOpen ${1} dsink
 }
 
 _doWritePartition() {
 	# arg 1 = /dev/sda
 	# 
-	_isBlockDevice ${1} || _log 4 "${1} is not a block device"
-	_isDeviceWritable ${1} || _log 4 "${1} is not ready"
-	sudo wipefs --all ${1} &>/dev/null || _log 4 "failed to wipefs ${1}"
+	_isBlockDevice ${1} || _error "${1} is not a block device"
+	_isDeviceWritable ${1} || _error "${1} is not ready"
+	sudo wipefs --all ${1} &>/dev/null || _error "failed to wipefs ${1}"
 	sudo parted -s ${1} mklabel gpt
 	sudo parted -s ${1} mkpart dsink 1 100%
 	_getPTUUID ${1} &>/dev/null || return 1
@@ -451,13 +395,6 @@ _status() {
 	exit 0
 }
 
-_test() {
-	# convenient function for use in testing things during development
-	_isDeviceReady $_workingParams || _log 4 "${_workingParams} is not ready"
-	_isBlockDevice $_workingParams
-	#_findNewDisk || _log 4 "no new disk found" && _log 1 "found ${_newDiskDevice}"
-	#_isBlockDevice $_workingParams && echo BLOCK || echo NOT BLOCK
-}
 
 _isBlockDevice() {
 	# arg1 = disk device to check (eg /dev/sda)
@@ -479,8 +416,8 @@ _isDeviceReady() {
 	until [ $(stat -c "%G" ${1}) = "disk" ]; do
 		sleep 0.1
 	done
-	_isDeviceWritable $1 || _log 4 "device $1 not writable"
-	#_getPartitionList $1 &>/dev/null || _log 4 "no partitions detected on $1"
+	_isDeviceWritable $1 || _error "device $1 not writable"
+	#_getPartitionList $1 &>/dev/null || _error "no partitions detected on $1"
 	return 0
 }
 
@@ -551,7 +488,7 @@ _findMounts() {
 				echo "$m ${yellow}unmounted${reset}"
 			fi
 		else
-			_log 4 "${m} did not return an expected value "
+			_error "${m} did not return an expected value "
 		fi
 	done
 }
@@ -571,8 +508,8 @@ _printMountInfo() {
 	# job: discover and print filesystem details of specified whole disk
 	# filesystem, mount state, and if empty
 	# arg 1 = whole disk device file (eg /dev/sda)
-	_partList=$(_getPartitionList "${1}") || _log 4 "no partitions"
-	_log 1 "partitions on ${_dev}: ${_partList}"
+	_partList=$(_getPartitionList "${1}") || _error "no partitions"
+	_info "partitions on ${_dev}: ${_partList}"
 }
 
 _getPartitionList() {
@@ -592,9 +529,9 @@ _printDiskInfo() {
 	# arg1 = whole disk device file (ie /dev/sda)
 	# get device info and print it in human readable form
 	_dev=${1##*/}
-	#_isBlockDevice $1 || _log 4 "$1 is not a block device"
-	_isDeviceReady $1 || _log 4 "$1 is not ready"
-	_isDeviceWritable $1 || _log 4 "$1 is not writable"
+	#_isBlockDevice $1 || _error "$1 is not a block device"
+	_isDeviceReady $1 || _error "$1 is not ready"
+	_isDeviceWritable $1 || _error "$1 is not writable"
 	udevadm settle
 	echo -e "\n==============PHYSICAL:========================================"
 	lsblk -S -oNAME,SIZE,VENDOR,PTTYPE,PTUUID ${1}
@@ -608,22 +545,22 @@ _printDiskInfo() {
 	fi
 	echo -e "\n==============STATE:==========================================="
 	if _isDiskDsink "${1}"; then
-		_checkMount && _log 3 "dsink mounted...${1}...i think"
+		_checkMount && _error "dsink mounted...${1}...i think"
 		if _PTUUID=$(_getPTUUID ${1}); then
-			_log 2 "${1} is a dsink disk: ${_PTUUID}"
+			_warn "${1} is a dsink disk: ${_PTUUID}"
 			if [ -d "${_dsinkCatalog}"/media/"${_PTUUID:0:3}" ]; then
-				_log 4 "disk id ${label}${_PTUUID:0:3}${reset} already exists in the media catalog!!"
+				_error "disk id ${label}${_PTUUID:0:3}${reset} already exists in the media catalog!!"
 			fi
 			return 0
 		else
-			_log 2 "${1} looks like a dsink disk, but has no PTUUID"
+			_warn "${1} looks like a dsink disk, but has no PTUUID"
 			echo "require some override here"
 			return 1
 		fi
 	else
 		# disk is not a dsink device
 		if ! _getPartitionList ${1} &>/dev/null; then
-			_log 2 "disk is without partitions"
+			_warn "disk is without partitions"
 			return 0
 		fi
 	fi
@@ -637,7 +574,7 @@ _irishExit() {
 	if [[ ${_ANS:-n} = 'R' ]]; then
 		return
 	else
-		_log 4 "user requested exit with ctrl-c"
+		_error "user requested exit with ctrl-c"
 	fi
 }
 
@@ -663,17 +600,17 @@ _findNewDisk() {
 	local _newInsertedUsbDisk
 	declare -g _newDiskDevice
 	local _attempts=3
-	_log 1 "insert usb drive now...hit CTRL-C to exit"
+	_info "insert usb drive now...hit CTRL-C to exit"
 	trap _irishExit SIGINT
 	while [ ${_attempts} -gt 0 ]; do
-		_log 1 "looking for new device..."
+		_info "looking for new device..."
 		if watch -n 0.1 -g ls /sys/block &>/dev/null; then
 			_usbDisksAfter=($(ls /sys/block))
 			_countAfter=${#_usbDisksAfter[@]}
 			if [[ ${_countAfter} -gt ${_countBefore} ]]; then
 				break
 			elif [[ ${_countAfter} -lt ${_countBefore} ]]; then
-				_log 3 "device disappeared...insert new device now"
+				_error "device disappeared...insert new device now"
 				# re-gather the device list
 				_usbDisksBefore=($(ls /sys/block))
 				((_countBefore--))
@@ -681,8 +618,8 @@ _findNewDisk() {
 			fi
 		fi
 	done
-	_log 0 "block devices before: [${#_usbDisksBefore[@]}] '${_usbDisksBefore[@]}'" 
-	_log 0 "block devices after: [${#_usbDisksAfter[@]}] '${_usbDisksAfter[@]}'" 
+	_debug "block devices before: [${#_usbDisksBefore[@]}] '${_usbDisksBefore[@]}'" 
+	_debug "block devices after: [${#_usbDisksAfter[@]}] '${_usbDisksAfter[@]}'" 
 	# determine the new device by comparing before and after lists
 	[[ ${_countBefore} == ${_countAfter} ]] && return 1
 	for i in "${_usbDisksAfter[@]}"; do
@@ -699,20 +636,20 @@ _unmount() {
 	# unmount fs, close luks device, notify device can be removed
 	# must be interactive to allow sudo command
 	# check for mount first
-	_checkMount || _log 4 "no disnk device mounted"
-	sudo umount "${_dsinkMount}" || _log 4 "${FUNCNAME[0]}: umount failed with err $?"
-	sudo cryptsetup luksClose dsink || _log 4 "${FUNCNAME[0]}: luksClose failed with err $?"
-	_log 1 "OK to remove usb device now"
+	_checkMount || _error "no disnk device mounted"
+	sudo umount "${_dsinkMount}" || _error "${FUNCNAME[0]}: umount failed with err $?"
+	sudo cryptsetup luksClose dsink || _error "${FUNCNAME[0]}: luksClose failed with err $?"
+	_info "OK to remove usb device now"
 }	
 
 _mount() {
 	# prompt use to insert dsink usb, open luks dsink, mount fs
 	# check for mount first
 	_detectedDsinkDevice=
-	_checkMount && _log 4 "dsink device already mounted"
+	_checkMount && _error "dsink device already mounted"
 	#echo "insert dsink usb now"
 	if [ -e /dev/disk/by-partlabel/dsink ]; then
-		_log 1 "dsink partition detected"
+		_info "dsink partition detected"
 		_detectedDsinkDevice=$(readlink -f /dev/disk/by-partlabel/dsink)
 	else
 		echo "no dsink partition available"
@@ -752,18 +689,34 @@ _checkMount() {
 	fi
 }
 
+_getMountedName() {
+	_mounted=$(find ${_dsinkMedia}/*/mounted -type f)
+	_a=${_mounted%*/mounted}
+	_media=${_a##*/}
+	echo ${_media}
+}
+
+_test() {
+	# convenient function for use in testing things during development
+	#_isDeviceReady $_workingParams || _error "${_workingParams} is not ready"
+	#_isBlockDevice $_workingParams
+	#_findNewDisk || _error "no new disk found" && _info "found ${_newDiskDevice}"
+	#_isBlockDevice $_workingParams && echo BLOCK || echo NOT BLOCK
+	_checkMount && _getMountedName
+}
+
 main() {
 	# validate the environment first
-	_isEnvSufficient || _log 4 "${FUNCNAME[0]}: fulfill requirements before using"
+	_isEnvSufficient || _error "${FUNCNAME[0]}: fulfill requirements before using"
 	# what are we trying to do (read all the positional parameters and set VARS)
 	_getOpts "${@}"
-	_log 0 "${FUNCNAME[0]}: parameters read: ${@}"
-	_log 0 "${FUNCNAME[0]}: paired-down parameters: $_workingParams"
+	_debug "${FUNCNAME[0]}: parameters read: ${@}"
+	_debug "${FUNCNAME[0]}: paired-down parameters: $_workingParams"
 	_getSubcommand $_workingParams
   # if run without arguments, run and print _status
 	[ -z "${_subCommand:-}" ] && _status
-	_log 0 "${FUNCNAME[0]}: _subCommand: $_subCommand"
-	_log 0 "${FUNCNAME[0]}: remaining args: $_workingParams"
+	_debug "${FUNCNAME[0]}: _subCommand: $_subCommand"
+	_debug "${FUNCNAME[0]}: remaining args: $_workingParams"
 	# do it
 	[ -n "${_subCommand:-}" ] && eval _"${_subCommand}"
 }
