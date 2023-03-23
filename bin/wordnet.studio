@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+
+# requires wn
+# sudo apt install wordnet
+
+_cols=$(tput cols)
+_fold=$(( ${_cols} - 7 ))
+
+#echo '' | fzf --print-query --preview-window "top:95%" --preview 'wn {q} -over | fold -w 91'
+#echo '' | fzf --print-query --preview-window "top:95%" --preview "wn {q} -over | fold -w ${_fold}"
+echo '' | fzf --print-query --preview-window "top:95%" --preview "wn {q} -over | less"
