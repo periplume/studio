@@ -312,7 +312,7 @@ _backup() {
 	# rsync from local source to mounted usb destination
 	_checkMount || { _warn "dsink usb device not mounted"; return 1; }
 	_rsyncDest="${_dsinkMount}"/rsync/
-	echo "backup from $HOME/studio to ${_rsyncDest}"
+	#echo "backup from $HOME/studio to ${_rsyncDest}"
 	rsync -a $HOME/studio/ "${_rsyncDest}"
 	_info "backup from $HOME/studio to ${_rsyncDest} complete"
 }

@@ -57,6 +57,10 @@ _error() {
 	local _cError=$(tput setaf 1)
 	printf '%s %s\n' "${_cError}ERROR${reset}" "${@}"
 }
+_debug() {
+	local _cDebug=$(tput setaf 6)
+	printf '%s %s\n' "${_cDebug}DEBUG${reset}" "${@}"
+}
 
 ####################################
 # HELPER FUNCTIONS
@@ -228,25 +232,23 @@ _installFile() {
 	local _sourceDir="$(dirname $1)"
 	# don't bother if files are the same
 	if cmp --silent "${1}" "${2}"; then
-		_info "${1} and ${2} are identical"
+		_debug "${1} and ${2} are identical"
 	else
 		if [[ -z "${_forceInstall:-}" ]]; then
 			# ask for confirmation
 			if [[ -e "${2}" ]]; then
 				# file already exists
-				_ask "replace ${2} with file from ${_sourceDir}? [y/n] "
+				#_ask "replace ${2} with file from ${_sourceDir}? [y/n] "
+				_ask "replace ${2}? [y/n] "
 				read -rsn1 _confirm; echo
 				[[ ${_confirm} = "y" ]] || { _error "file not copied"; return 1; }
-				#echo "copy ${red}OVER${reset} ${1} to ${2}"
 				cp "${1}" "${2}"
 			else
 				# file does not exist
-				#echo "copy ${green}NEW${reset} ${1} to ${2}"
 				cp "${1}" "${2}"
 			fi
 		else
 			# force enabled
-			#echo "force copy ${1} to ${2}"
 			cp "${1}" "${2}"
 		fi
 	fi

@@ -2028,7 +2028,7 @@ HEREDOC
   browse     read through the current source entities
   status     show germ health
   inspect    run tig to inspect repo
-  s) source     add and manipulate source
+  source     add and manipulate source
   stop       exit studio
   help       print this message
 

@@ -1,11 +1,89 @@
 #!/usr/bin/env bash
 
-# requires wn
+# requires wn (wordnet)
 # sudo apt install wordnet
+# requires gawk and m4 for colorit
+# requires dict-moby-thesaurus
+# download here: https://packages.ubuntu.com/bionic/all/dict-moby-thesaurus/download
+# install like this:
+# sudo dpkg -i ~/Downloads/dict-moby-thesaurus_1.0-6.4_all.deb
 
+# trim the width according to the screen
 _cols=$(tput cols)
-_fold=$(( ${_cols} - 7 ))
+#_fold=$(( ${_cols} - 7 ))
+_fold=$(bc <<<"${_cols}*.75-5")
+_fold=${_fold%.*}
+# not necessary with fzf preview-window wrap option
 
-#echo '' | fzf --print-query --preview-window "top:95%" --preview 'wn {q} -over | fold -w 91'
-#echo '' | fzf --print-query --preview-window "top:95%" --preview "wn {q} -over | fold -w ${_fold}"
-echo '' | fzf --print-query --preview-window "top:95%" --preview "wn {q} -over | less"
+_cycleView() {
+	# use indexed array to define the possible views to cycle through
+	declare -a _allViews=( dict-gcide dict-moby wordnet )
+	declare -A _viewCommands
+	_viewCommands[dict-gcide]="dict -d gcide $1 | colorit"
+	_viewCommands[dict-moby]="dict -d moby-thesaurus $1 | colorit"
+	_viewCommands[wordnet]="wn $1 -over | sed 's/$1/\x1b[32m$1\x1b[0m/g'"
+	# set the local var (which we set if unset...or get from touch file if set)
+	local _currentView
+	local _currentIndex
+	#echo "length of _allViews list: '${#_allViews[@]}'"
+	if [[ -e .currentView ]]; then
+		_currentView=$(cat .currentView)
+		#echo "current view is already set: '${_currentView}'"
+		# damn bash makes some things really difficult...give me the index of the
+		# current value in the list:
+		for i in "${!_allViews[@]}"; do
+			if [[ "${_allViews[$i]}" = "${_currentView}" ]]; then
+				_currentIndex=$i
+				#echo "_currentIndex is ${_currentIndex}"
+			fi
+		done
+		#echo "reset to the next index, or the first if this is the last"
+		_adjustedIndex=$((_currentIndex+1))	
+		if [[ ${_adjustedIndex} = ${#_allViews[@]} ]]; then
+			#echo "already at the last...set to the first"
+			_currentView=${_allViews[0]}
+			echo ${_currentView} > .currentView
+			#echo "current view set to ${_currentView}"
+		else
+			#echo "just increment by one"
+			((_adjustedIndex+1))
+			_currentView=${_allViews[${_adjustedIndex}]}
+			#_currentView=${_allViews[$((_adjustedIndex+1))]}
+			echo ${_currentView} > .currentView
+			#echo "current view set to ${_currentView}"
+		fi 
+		# now set it to the next, and if the current index is equal to the length
+		# (minding that the index is n-1, of course)
+	else
+		#echo "current view is not set; setting to first item"
+		_currentView=${_allViews%% *}
+		echo ${_currentView} > .currentView
+		#echo "current view set to ${_currentView}"
+	fi
+	echo "========${_viewCommands[${_currentView}]}================"
+	eval "${_viewCommands[${_currentView}]}"
+}
+export -f _cycleView
+
+# seed with the local words list (search is not limited by this list)
+_lookup() {
+	cat /usr/share/dict/words | fzf \
+		--no-mouse \
+		--info=inline \
+		--preview-window=right,"75%",border-rounded,wrap,~2 \
+		--preview-label="reference" \
+		--bind "ctrl-e:toggle-preview" \
+		--bind "tab:replace-query" \
+		--bind "ctrl-p:preview(_cycleView {q})" \
+		--color="bg:#222222,preview-bg:#333333,header:yellow" \
+		--header='references ->
+shift-arrows scrolls preview
+tab fill query from selected
+ctrl-p:cycle sources' \
+		--preview="wn {q} -over | sed 's/{q}/\x1b[32m{q}\x1b[0m/g'"
+}
+# with sed, we add ascii green to highlight the query string in the preview
+# window
+_lookup "$@"
+# cleanup state
+[[ -e .currentView ]] && rm .currentView

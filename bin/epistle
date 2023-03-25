@@ -731,7 +731,7 @@ _print() {
 	_state=${_what%%/*}
 	local _header="||page $% of $="
 	iconv -c -f utf-8 -t ISO8859-1 "${_what}" | \
-		enscript -b"${_header}" -F "Courier7" --margins=50::20: -f "Courier10" -P "${_printer}"
+		enscript -b"${_header}" -F "Courier7" --margins=50::20: -f "Courier12" -P "${_printer}"
 	if [[ "${_state}" != "print" ]]; then
 		git ${_git} mv "${_what}" "print/${_key}"
 	fi

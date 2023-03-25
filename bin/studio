@@ -13,6 +13,13 @@ set -o pipefail
 
 source studio-lib.sh
 
+###########################
+# LOGGING AND CONSOLE
+###########################
+
+_fLOG
+# the log/console functions instantited now will be re-initialized after all the
+# command line parameters are processed
 
 ###########################
 # PREREQUISITES
@@ -188,7 +195,6 @@ _setEnv() {
 	_debug "_studioDirName=$_studioDirName"
 	_debug "_studioDir=$_studioDir"
 	_debug "_logFile=$_logFile"
-	_debug "git version= $(git $_git -v)"
 	_debug "_canLog=${_canLog:-false}"
 	_debug "_user=${_user:-unset}"
 	_debug "_DEBUG=$_DEBUG"
@@ -209,12 +215,12 @@ _isEnvSufficient() {
 		fi
 	done
 	# check for germ dir (unless we are running create)
-	if [ ! -d "${_germDir}" ]; then
+	if [ ! -d "${_studioDir}" ]; then
 		if [ -z "${_subCommand:-}" ]; then
-			_error "found no ${_germDir}; run 'germ create' first"
+			_error "found no ${_studioDir}; run a create function first?"
 		 	return 1
 		elif [ ! ${_subCommand:=} = "create" ]; then
-			_error "found no ${_germDir}; run 'germ create' first"
+			_error "found no ${_studioDir}; run 'studio create' first??"
 			_sufficient=false
 		fi
 	fi
@@ -252,6 +258,29 @@ _getAddOpts() {
 	export _workingParams=$*
 }
 
+_search() {
+	local _query="${*:-}"
+	local _rg="rg --line-number --no-heading --color=always --smart-case -g '!*.ps' --multiline --text "
+	FZF_DEFAULT_COMMAND="$_rg $(printf %q "$_query")" \
+		fzf --ansi \
+				--disabled \
+				--no-mouse \
+				--query "${_query}" \
+				--bind "change:reload:sleep 0.1; $_rg {q} || true" \
+				--delimiter : \
+				--info=inline \
+				--preview 'batcat --color=always {1} --highlight-line {2}' \
+				--preview-window 'up,60%,border-bottom,+{2}+3/3,~3' \
+				--bind "enter:execute(less {1})"
+}
+
+__search() {
+	local _query="${*:-}"
+	local _rg="rg --column --line-number --no-heading --color=always --smart-case "
+	FZF_DEFAULT_COMMAND="$_rg '$_query'" \
+		fzf --bind "change:reload:$_rg {q} || true" \
+				--ansi --disabled --query "$_query"
+}
 ###############
 ###### SHELL
 ###############
@@ -268,32 +297,91 @@ _shell() {
 	HISTCONTROL=ignoreboth
 	shopt -s histappend
 	set -o history
-	local _p
-	local _dirty
-	local _session="${_user}.$(date +%s)"
-	# confirm exit function
+	local _p			#prompt
+	local _menu		#a list of all possible commands
+	# data protection level indicators
+	# RF levels are defined as follows:
+	# RF-1: buffer, editor autosave/swap areas, the dirtiest
+	# RF-2: commit status (ie is the index dirty)
+	# RF-3: plugged dsink USB device status
+	# RF-4: keychain dsink USB device status
+	# RF-5: remote repos connection status
+	# each is displayed as green, yellow, or red
+	# TODO fill out these functions to display different levels accurately
+	_getRF-1() {
+		echo "1"
+	}
+	_getRF-2() {
+		echo "${green}2${reset}"
+	}
+	_getRF-3() {
+		echo "${yellow}3${reset}"
+	}
+	_getRF-4() {
+		echo "${red}4${reset}"
+	}
+	_getRF-5() {
+		echo "5"
+	}
+	_getDsinkMedia() {
+		# print the dsink media tag in green or print 'none' in red
+		local _dsinkMediaName
+		_dsinkMediaName="${green}$(dsink status -m)${reset}" || _dsinkMediaName="${red}none${reset}"
+		echo ${_dsinkMediaName}
+	}
+	_printStudioContents() {
+		# the dynamic menu
+		# list the subdirectories inside studio
+		local _cmds
+		_cmds=$(ls .)
+		echo "${_cmds}"
+		# build this out to display type/status/etc for each studio "module"
+		# use printf etc and colors
+	}
+	_interactiveCommandReader() {
+		# command line feedback
+		local _commandList
+		#shopt -s extglob
+		while true; do
+			_commandList=$(_printStudioContents)
+			_altCommands=("get" "print" "show")
+			_feed=("${_commandList}" "${_altCommands}")
+			_chosen="$(printf '%s\n' "${_feed[@]}" |
+				fzf --margin=10% --preview '
+					if $(test -d {}/.git); then
+						echo {} is a git repo
+					else
+						ls -a --color {}
+					fi
+			')"
+			# if the selection is something, return
+			# but not if nothing is selected
+			#[[ ${#_chosen} != 0 ]] || return 0
+			echo ${_chosen} && return 0
+		done
+	}
 	_displayWelcome() {
-	cat <<HEREDOC
+		echo -ne "
+   ${yellow}**${cyan}STUDIO${reset}${yellow}**${reset}
+                             
+   studio: type ${green}h${reset} for guidance
+           type ${red}q${reset} to quit
 
-**STUDIO**
-
-studio: type ${green}help${reset} for guidance
-        type ${red}stop${reset} to leave
-
-HEREDOC
+"
 	}
 	_printShellUsage() {
-		cat << EOF
+		echo -ne "
+  ?    show help
+  l    list studio contents
+  w    wordnet lookup
+  g    germ
+  e    epistle
+  s    search
+  m    mount dsink usb
+  b    backup to dsink
+  q    quit
 
-${green}add function to display menu${reset}
-
-  status     show germ health
-  inspect    run tig to inspect repo
-  source     add and manipulate source
-  stop       exit studio
-  help       print this message
-
-EOF
+"
 	}
 	# main shell prompt function
 	_mainPrompt() {
@@ -307,61 +395,107 @@ EOF
 		red=$'\001\e[00;31m\002'
 		yellow=$'\001\e[00;33m\002'
 		green=$'\001\e[00;32m\002'
-		_cH=$'\001\e[00;45m\002'
-		_cG=$'\001\e[00;7m\002'
-		_cU=$'\001\e[00;32m\002'
-		_cS=$'\001\e[00;33m\002'
-		_dirty="${green}o${reset}"
-		_isIndexClean || _dirty="${red}-${reset}"
-		_cs=$(_getSource)
-		echo -n "${_cH}${_studioDirName}${reset}:${_cU}${_user}${reset} [${_cS}${_cs}${reset}] ${_dirty} > "
+		_cH=$'\001\e[00;45m\002'		#home
+		_cG=$'\001\e[00;7m\002'			#germ
+		_cU=$'\001\e[00;32m\002'		#user
+		_cS=$'\001\e[00;33m\002'		#source
+		_data="$(_getRF-1)$(_getRF-2)$(_getRF-3)$(_getRF-4)$(_getRF-5)"
+		echo -n "${_cH}${_studioDirName}${reset}:${_cU}jason${reset} [${_data}:$(_getDsinkMedia)] > "
 	}
 	local __input
-	while IFS='' read -r -d $'\n' -p "$(_p)" -e __input || true; do
-		history -s "${__input}"
-		if [[ -z "${__input}" ]]; then
-			true
-		elif [[ ${__input} =~ [[:cntrl:]] ]]; then
-			_warn "control char found"
-		elif [[ ${__input} == $'\e' ]]; then
-			_warn "no escape" && true
-		elif [[ "${__input}" =~ (^stop$|^quit$|^exit$|^q$) ]]; then
-			_confirmExit
-		elif [[ "${__input}" =~ (^help$|^h$|^\?$) ]]; then
-			_printShellUsage
-		elif [[ "${__input}" =~ (^list$|^l$) ]]; then
-			_listTags
-		elif [[ "${__input}" =~ (^browse$|^b$) ]]; then
-			_browse "$(_getSource)"
-		elif [[ "${__input}" =~ (^search$|^s$) ]]; then
-			_search
-		elif [[ "${__input}" =~ ^git ]]; then
-			_gitCommand=(${__input})
-			git ${_gitWT} ${_gitCommand[@]:1} || :
-		elif [[ "${__input}" =~ (^status$|^stat$) ]]; then
-			_showStatus
-			_isIndexClean || _warn "DIRTY INDEX"
-		elif [[ "${__input}" =~ (^add$|^a$) ]]; then
-			eval "${self}" "${_originalParameters}" add || true
-		elif [[ "${__input}" =~ (^source$|^s$) ]]; then
-			_source
-		else
-			# send the command (with the original command parameters) back to the
-			# calling script
-			#printf %s "${#__input} character ['${__input}'] "
-			#(export LC_ALL=C; printf '%s\n' "made of ${#__input} byte(s) was read")
-			eval "${self}" "${_originalParameters}" "${__input}" || :
-			# and if the command fails...return back to this shell prompt instead of
-			# exiting.
-			# TODO capture the $? and use it to colorize the > at the end of the
-			# _shell prompt
-		fi
+	# simple one character interface
+	while read -rsn1 -p "$(_p)" __input || true; do
+	echo
+		case ${__input} in
+			l)
+				_interactiveCommandReader || :
+				;;
+			h|\?)
+				_printShellUsage
+				;;
+			q)
+				exit
+				;;
+			b)
+				dsink backup || { _warn "dsink backup failed"; continue; }
+				;;
+			m)
+				dsink mount || { _warn "could not mount dsink usb"; continue; }
+				;;
+			g)
+				printf '\e[?5h'; sleep 0.2 ; printf '\e[?5l'
+				clear
+				germ || { _warn "an error occurred in germ"; continue; }
+				;;
+			e)
+				printf '\e[?5h'; sleep 0.2 ; printf '\e[?5l'
+				clear
+				epistle
+				;;
+			s)
+				_search || :
+				;;
+			w)
+				wordnet.studio || :
+				;;
+			$'\e')
+				# read escape keys
+				read -rsn1 -t .002 _escKey || { echo "escape key can be made useful"; continue; }
+				if [[ "$_escKey" == "[" ]]; then
+					read -rsn1 -t .002 _escKey
+						case "$_escKey" in
+							"A")
+								echo "up arrow key ($_escKey) can be made useful"
+								;;
+							"B")
+								echo "down arrow key ($_escKey) can be made useful"
+								;;
+							"C")
+								echo "right arrow key ($_escKey) can be made useful"
+								;;
+							"D")
+								echo "left arrow key ($_escKey) can be made useful"
+								;;
+							"3")
+								echo "delete key ($_escKey) can be made useful"
+								;;
+							"2")
+								echo "insert key ($_escKey) can be made useful"
+								;;
+							"F")
+								echo "end key ($_escKey) can be made useful"
+								;;
+							"H")
+								echo "home key ($_escKey) can be made useful"
+								;;
+							*) echo "$_escKey pressed"
+								;;
+						esac
+				else
+					echo "escape sequence pressed ($_escKey)"
+				fi
+				read -rsn6 -t .002 || continue
+				;;
+			$'\177')
+				echo "backspace key can be made useful"; continue
+				read -rsn1 -t .002 _ctrlKey || echo "couldn't read control key ($_ctrlKey)"
+				echo $_ctrlKey
+				;;
+			$'\04')
+				echo "ctrl-d can be made useful"; continue
+				read -rsn1 -t .002 _ctrlKey || echo "couldn't read control key ($_ctrlKey)"
+				echo $_ctrlKey
+				;;
+			*)
+				continue
+				;;
+			# still "alt-[" sends an exit signal it seems?  maybe a good backdoor exit
+		esac
 	done
 	}
 	_displayWelcome
 	_mainPrompt
 }
-
 
 main() {
 	# what are we trying to do (read all the positional parameters and set VARS)
@@ -387,16 +521,7 @@ main() {
 	[[ -p /dev/stdout ]] && _debug 'STDOUT is attached to a pipe'
 	[[ ! -t 1 && ! -p /dev/stdout ]] && _debug 'STDOUT is attached to a redirection'
 	_isEnvSufficient || { _error "cannot run until these problems are resolved"; return 1; }
-	# set the global _user vars
-	_userSet
-	# run germ shell if no arguments
+	# run shell if no arguments
 	[ -z "${_subCommand:-}" ] && _shell
-	# ctrl-d exits out of the last command...the trap set in the _shell catches
-	# the EXIT signal, and runs.  but by now, we're toast.  ctrl-d must be caught
-	# earlier in order to be able to pass the commands back to the master script.
-	# it's a handy trick but may be unnecessary
-	# otherwise, pass the commands to the called "command"
-	_debug "now calling the eval to run '${_subCommand:-}'"
-	[ -n "${_subCommand:-}" ] && eval _"${_subCommand}" || exit
 }
 main "${@}"

@@ -9,6 +9,16 @@ set -o errexit
 set -o nounset
 set -o pipefail
 
+# BEHAVIOR
+# debugging and logging settings
+# script debug toggle (set to true to enable default global debugging)
+_DEBUG=false
+# silent mode for scripting (supresses all output)
+_SILENT=false
+# logging facility
+_LOG=false
+
+
 # OUTPUT
 
 # some color
