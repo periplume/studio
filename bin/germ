@@ -1389,6 +1389,45 @@ _getSourceCount() {
 }
 export -f _getSourceCount
 
+_closeSource() {
+	# mark 'source' as closed, ie, no new entries allowed
+	# edits allowed
+	local _source=${1}
+	if _doesKeyExist c/${_source}/self.closed; then
+		return 
+	fi
+	_mapEmpty "c/${_source}/self.closed"
+	_doCommit "[source] ${1} closed"
+}
+
+# TODO enforce source 'closed' status in _add
+
+_openSource() {
+	local _source=${1}
+	if _doesKeyExist c/${_source}/self.closed; then
+		_deleteKey c/${_source}/self.closed
+	fi
+}
+
+_getSourceStatus() {
+	# return source status
+	# open (default)
+	# closed
+	# return 1 if neither
+	local _source=${1}
+	if _doesKeyExist c/${_source}/self.closed; then
+		echo "closed"
+	else
+		echo "open"
+	fi
+}
+
+# source status modes
+# open (can add, rename, edit, close)
+# closed (can edit)
+# a closed source is like a notebook whose contents have been fully transcribed
+# but whose content may be furhter edited
+
 # source methods
 # _isSourceSet		check for c/*/current
 # _getSource			return c/$source/current
@@ -1423,13 +1462,15 @@ _source() {
 		_displaySource="${yellow}${_currentSource}${reset}"
 	fi
 	_sc=$(_getSourceCount ${_currentSource})
+	#_ss=$(_getSourceStatus ${_currentSource}) || _ss="none"
+	_ss=$(_getSourceStatus ${_currentSource})
 	if [[ ${_sc} = 0 ]]; then
 		_sourceCount="${yellow}${_sc}${reset}"
 	else
 		_sourceCount="${green}${_sc}${reset}"
 	fi
 	echo -ne "
-    current source: ${_displaySource} [${_sourceCount}]
+    current source: ${_displaySource} [${_sourceCount}] (${_ss})
 
     c) change current source
     b) browse entities in current source
@@ -1438,6 +1479,8 @@ _source() {
     l) list entities
     e) edit description
     r) rename current source
+    x) close source
+    o) re-open source
     a) add new source
     m) merge two sources (future)
     ?) help
@@ -1480,6 +1523,7 @@ _source() {
 			s)
 				_info "current source: ${_currentSource}"
 				_info "description: $(_readKey c/${_currentSource}/self.description)"
+				_info "status: $(_getSourceStatus ${_currentSource})"
 				;;
 			e)
 				_newDescription=$(_readKey "c/${_currentSource}/self.description" | vipe)
@@ -1508,6 +1552,13 @@ _source() {
 			r)
 				_renameSource "${_currentSource}"
 				_showOptions
+				;;
+			x)
+				_closeSource "${_currentSource}" || { _warn "could not close source"; }
+				_showOptions
+				;;
+			o)
+				_openSource "${_currentSource}"
 				;;
 			q)
 				return
