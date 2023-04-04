@@ -637,7 +637,8 @@ _unmount() {
 	# must be interactive to allow sudo command
 	# check for mount first
 	_checkMount || _error "no disnk device mounted"
-	sudo umount "${_dsinkMount}" || _error "${FUNCNAME[0]}: umount failed with err $?"
+	_media=$(_getMountedName) && _info "found mounted device ${_media}"
+	sudo umount "${_dsinkMount}" && rm "${_dsinkCatalog}/media/${_media}/mounted" || { _error "unmount failure"; return; }
 	sudo cryptsetup luksClose dsink || _error "${FUNCNAME[0]}: luksClose failed with err $?"
 	_info "OK to remove usb device now"
 }	
@@ -660,6 +661,9 @@ _mount() {
 		fi
 		sudo mount /dev/mapper/dsink "${_dsinkMount}"
 		sudo chown -R jason:jason "${_dsinkMount}"
+		_deviceID=${_detectedDsinkDevice::-1}
+		_media=$(_getPTUUID ${_deviceID})
+		touch "${_dsinkCatalog}/media/${_media:0:3}/mounted"
 	else
 		echo "insert a dsink device and try again"
 	fi

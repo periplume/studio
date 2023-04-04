@@ -378,6 +378,7 @@ _shell() {
   e    epistle
   s    search
   m    mount dsink usb
+  u    unmount dsink usb
   b    backup to dsink
   q    quit
 
@@ -421,6 +422,9 @@ _shell() {
 				;;
 			m)
 				dsink mount || { _warn "could not mount dsink usb"; continue; }
+				;;
+			u)
+				dsink unmount
 				;;
 			g)
 				printf '\e[?5h'; sleep 0.2 ; printf '\e[?5l'

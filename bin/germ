@@ -616,6 +616,7 @@ _add() {
 	else
 		_currentSource="default"
 	fi
+	_isSourceOpen $(_getSource) || { _error "source closed, reopen to add"; return 1; }
 	# FIX THIS...-i should not require -b
 	# -b just means read from stdin...and it can be one or many lines
 	# QUESTION...is it possible to detect a bulk mode input...so that when bulk is
@@ -1409,7 +1410,7 @@ _openSource() {
 	fi
 }
 
-_getSourceStatus() {
+_printSourceStatus() {
 	# return source status
 	# open (default)
 	# closed
@@ -1420,6 +1421,18 @@ _getSourceStatus() {
 	else
 		echo "open"
 	fi
+}
+
+_isSourceOpen() {
+	# return 0 if true (source is open)
+	# return 1 if false (source is closed)
+	# use to enforce source closed status
+	local _source=${1}
+	_doesKeyExist c/${_source}/self.closed && return 1 || return 0
+}
+
+_test() {
+	_isSourceOpen $(_getSource) && echo "source is open" || echo "source is closed"
 }
 
 # source status modes
@@ -1462,8 +1475,8 @@ _source() {
 		_displaySource="${yellow}${_currentSource}${reset}"
 	fi
 	_sc=$(_getSourceCount ${_currentSource})
-	#_ss=$(_getSourceStatus ${_currentSource}) || _ss="none"
-	_ss=$(_getSourceStatus ${_currentSource})
+	#_ss=$(_printSourceStatus ${_currentSource}) || _ss="none"
+	_ss=$(_printSourceStatus ${_currentSource})
 	if [[ ${_sc} = 0 ]]; then
 		_sourceCount="${yellow}${_sc}${reset}"
 	else
@@ -1523,7 +1536,7 @@ _source() {
 			s)
 				_info "current source: ${_currentSource}"
 				_info "description: $(_readKey c/${_currentSource}/self.description)"
-				_info "status: $(_getSourceStatus ${_currentSource})"
+				_info "status: $(_printSourceStatus ${_currentSource})"
 				;;
 			e)
 				_newDescription=$(_readKey "c/${_currentSource}/self.description" | vipe)
@@ -1894,6 +1907,7 @@ _search() {
 		tput sgr0
 	}
 	_showMenu() {
+		clear
 		echo -ne "
 
   search commits: ${_commitRange:-latest}
