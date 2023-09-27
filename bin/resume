@@ -1,0 +1,628 @@
+#!/usr/bin/env bash
+# file: resume
+# desc: resume builder and publishing agent
+# source: https://github.com/periplume/studio.git
+# author: jason@bloom.us
+
+_defaultPublishURL=jkl.bloom.us
+
+###########################
+# PREREQUISITES
+###########################
+
+# required commands
+_requiredCommands=(git gitdisk dsink vipe fzf)
+
+# recommended commands
+_recommendedCommands=(git-sizer tig)
+
+
+###########################
+# LIBRARY SOURCES
+###########################
+
+source studio-lib.sh
+
+###########################
+# LOGGING AND CONSOLE
+###########################
+
+_fLOG
+# the log/console functions instantited now will be re-initialized after all the
+# command line parameters are processed, ie modified by flags
+# defaults (from the studio-lib.sh file) will be used initially, which can be
+# overriden below in BEHAVIOR
+
+
+###########################
+# ENVIRONMENT SETTINGS
+###########################
+
+# GLOBAL VARIABLES
+# these never change in the context of a session
+# these will be exported (in the case of fzf previews etc) 
+
+# WORKING ENVIRONMENT
+# _studioDirName is the umbrella or master namespace in which resume operates
+_studioDirName=studio
+# resume lives inside studio
+_resumeDirName=resume
+# get the name of the script itself
+self=$(basename $0)
+
+# BEHAVIOR
+
+# debugging and logging settings
+# script debug toggle (set to true to enable default global debugging)
+_DEBUG=false
+# silent mode for scripting (supresses all output)
+_SILENT=false
+# logging facility
+_LOG=false
+
+
+####################################
+# HELPER FUNCTIONS
+####################################
+
+_printUsage () {
+  cat << EOF
+
+usage: resume [OPTIONS] <command> [OPTIONS]
+
+options:
+ -h      print this usage info
+ -l      log commands and debug info to log file
+ -d      print debug info to stdout and/or log
+ -s      suppress all stdout/stderr
+ -v      print version number and exit
+
+alternate env settings:
+ -a <name>  set the resume dir name to <name>
+ -w <name>  set the master studio dir to <name> (assumes \$HOME/<name>)
+
+commands:
+ new                 create a new resume or cover letter
+ edit                edit an existing resume or cover letter
+ publish             publish resume to ${_defaultPublishURL}
+ list                list resumes
+ inspect             run tig on the repo
+
+EOF
+}
+
+_printInfo () {
+  cat << EOF
+
+resume manages all aspects of creating and maintaining a resume,
+including publishing it to a designated URL
+
+EOF
+}
+
+####################################
+# PARAMETER PROCESSING FUNCTIONS
+####################################
+
+_getOpts () {
+	# check for global command flags and set VARS accordingly
+	local OPTIND
+	# make the original environment available to _shell for calling back into main
+	export _originalParameters=${*}
+	_debug "${FUNCNAME}: positional parameters read: $*"
+	while getopts ":hsdlva:w:" flag ; do
+		_debug "${FUNCNAME}: OPTIND=$OPTIND flag=$flag"
+		case ${flag} in 
+			h)
+				_printInfo ; _printUsage; exit 0
+				;;
+     a)
+        export _resumeDirName=$OPTARG
+        # TODO find a better way of avoiding using key words as OPTARGs
+        [[ $OPTARG =~ add|edit|create|print ]] && { _error "'$OPTARG' not allowed as name for -$flag"; exit 1; }
+        _debug "using alternative resume name '$_resumeDirName'"
+        ;;
+      w)
+        export _studioDirName=$OPTARG
+        [[ $OPTARG =~ add|edit|create|print ]] && { _error "'$OPTARG' not allowed as name for -$flag"; exit 1; }
+        _debug "using alternative studio name '$_studioDirName'"
+        ;;
+
+ 	    s)
+				_debug "${FUNCNAME}: enabling silent mode with flag -$flag"
+ 	      export _SILENT=true
+				;;
+			d)
+				_debug "${FUNCNAME}: enabled debug mode with flag -$flag"
+				export _DEBUG=true
+				;;
+			l)
+				_debug "${FUNCNAME}: enabled log mode with flag -$flag"
+				export _LOG=true
+				;;
+			v)
+				_info "${green}verion${reset}: beta"; exit 0
+				;;
+			?)
+				_error "invalid global option: -$OPTARG"; exit 1
+				;;
+		esac
+	done
+	shift $((OPTIND - 1))
+	# export a paired down parameter string flags and args read within this
+	# function will be discarded, leaving behind only that which the rest needs
+	export _workingParams=$*
+	_debug "${FUNCNAME}: _LOG=${_LOG}"
+	_debug "${FUNCNAME}: _SILENT=${_SILENT}"
+	_debug "${FUNCNAME}: _DEBUG=${_DEBUG}"
+	return
+}
+
+_getSubcommand() {
+	# look for the first subcommand and set _subCommand accordingly
+	while ((${#})); do
+		_debug "${FUNCNAME}: reading parameter '${1}'"
+		case $1 in
+			help)
+				_printInfo ; _printUsage; exit 0
+				;;
+			new)
+				_debug "${FUNCNAME}: '$1' called, checking for $1 flags now"
+				_subCommand=$1
+				_getAddOpts
+				return
+				;;
+			edit)
+				_debug "${FUNCNAME}: '$1' called, checking for $1 flags"
+				_subCommand=$1
+				#_getEditOpts
+				return
+				;;
+			list)
+				_debug "${FUNCNAME}: '$1' called"
+				_subCommand=$1
+				return
+				;;
+			publish)
+				_subCommand=$1
+				return
+				;;
+			inspect)
+				_subCommand=$1
+				return
+				;;
+			test)
+				_subCommand=$1
+				return
+				;;
+			*)
+				_error "${FUNCNAME}: '${1}' is not a subcommand"
+				return 1
+				;;
+		esac
+		shift
+	done
+}
+
+_setEnv() {
+	# set (and print) the environment
+	#_info "setting up environment now"
+	export _studioDir="$(dirname ~/.)/${_studioDirName}"
+	export _resumeDir="${_studioDir}/${_resumeDirName}"
+	export _resumeGitDisk="${_resumeDir}/.git"
+	export _logFile="${_resumeDir}/resume.log"
+	export _git="--git-dir=${_resumeGitDisk}"
+	export _gitWT="--git-dir=${_resumeGitDisk} --work-tree=${_resumeDir}"
+	[[ -f "${_logFile}" ]] && _canLog=true || _canLog=false
+	export _canLog
+	_debug "self=$self"
+	_debug "_studioDirName=$_studioDirName"
+	_debug "_studioDir=$_studioDir"
+	_debug "_resumeDirName=$_resumeDirName"
+	_debug "_resumeDir=$_resumeDir"
+	_debug "_resumeGitDisk=$_resumeGitDisk"
+	_debug "_logFile=$_logFile"
+	_debug "_gitWT=$_gitWT"
+	_debug "_git=$_git"
+	_debug "git version= $(git $_git -v)"
+	_debug "_canLog=${_canLog:-false}"
+	_debug "_user=${_user:-unset}"
+	_debug "_DEBUG=$_DEBUG"
+	_debug "_SILENT=$_SILENT"
+	_debug "_LOG=$_LOG"
+	_debug "git command: 'git ${_git}'"
+	_debug "gitWT command: 'git ${_gitWT}'"
+}
+
+_isEnvSufficient() {
+	# check for required tools, report accordingly
+	# TODO add recommended checks with _missing{0:name,1:name}
+	local _sufficient=true
+	for _required in "${_requiredCommands[@]}"; do
+		if ! hash "${_required}" 2>/dev/null; then
+			_warn "${FUNCNAME}: ${_required} not found"
+			_sufficient=false
+		else
+			_debug "${FUNCNAME}: ${_required} found"
+		fi
+	done
+	# check for resume dir (unless we are running create)
+	if [ ! -d "${_resumeDir}" ]; then
+		if [ -z "${_subCommand:-}" ]; then
+			_error "found no ${_resumeDir}; run 'resume create' first"
+		 	return 1
+		elif [ ! ${_subCommand:=} = "create" ]; then
+			_error "found no ${_resumeDir}; run 'resume create' first"
+			_sufficient=false
+		fi
+	fi
+	[ ${_sufficient} = true ] && return 0 || return 1
+}
+
+#################################
+# SUBCOMMAND OPTION PROCESSING
+#################################
+
+_getAddOpts() {
+	# check for _add() flags and args
+	local OPTIND=1
+	set -- ${_workingParams}
+	_debug "${FUNCNAME}: positional parameters read: $*"
+	shift
+	while getopts ":d:" flag "$@"; do
+		case ${flag} in
+			d)
+				# specify alternate date (rather than today)
+				_debug "alternate date specified=$OPTARG"
+				_altDate="${OPTARG}"
+				;;
+			?)
+				 _error "${FUNCNAME}: unknown flag -$OPTARG"; exit 1
+				;;
+		esac
+	done
+	shift $((OPTIND - 1))
+	export _workingParams=$*
+}
+
+
+####################################
+# HEALTH AND STATUS
+####################################
+
+_inspect() {
+	tig -C${_resumeDir}
+}
+
+_isIndexClean() {
+	# radical departure here...use intent/ as pre-commit working
+	# directory...make vim auto-save files there...etc
+	git ${_git} diff-index --quiet --cached main 2>&1 >/dev/null || return 1
+}
+
+_isBufferClean() {
+	# checks for files left in intent/ (ie vim swp)
+	[[ -z "$(ls ${_resumeDir}/intent)" ]]
+}
+
+##################################
+# NEW
+##################################
+
+_validateName() {
+	# function to validate the format of the recipient's name
+	# rules: upper, lower, and digits allowed
+	# space, dot, dash, comma, and apostrophe	allowed
+	# first must be letter (upper or lower)
+	# last must be letter or number
+	# space and non-alpha-numeric characters cannot repeat
+	# IRS allows ampersand and dash
+	# names allow apostrophe, hyphen, period, space
+	# arg 1 = name to evaluate
+	local _valid=true
+	local _lenLimit=60
+	[[ "${1}" =~ ^[[:upper:]|[:lower:]] ]] || \
+		{ _warn "name '${1}' must begin with a letter"; _valid=false; }
+	[[ "${1}" =~ [[:alnum:]]$ ]] || \
+		{ _warn "name '${1}' must end with letter or number"; _valid=false; }
+	[[ ! "${1}" =~ ([.]|[-]|[,]|[\']){2} ]] || \
+		{ _warn "non-alphanumeric [.-,'] characters mustn't repeat"; _valid=false; }
+	[[ ! "${1}" =~ ([ ]){2} ]] || \
+		{ _warn "space character mustn't repeat"; _valid=false; }
+	[[ "${1}" =~ ^([[:alnum:]]|[-,.\' ])*$ ]] || \
+		{ _warn "allowed characters: letters, numbers, comma, dot, dash, apostrophe"; _valid=false; }
+	[[ ${#1} -le ${_lenLimit} ]] || \
+		{ _warn "length (${#1}) exceeds length limit of ${_lenLimit}"; _valid=false; }
+	[[ $_valid = true ]] || return 1
+}
+
+_new() {
+	# create a new resume
+	local _recipient
+	local _time=$(date +%s)
+	# if the -d flag was used to specify the date, it is used to name the file and
+	# placed in the date field of the letter
+	_date=${_altDate:-$(date --date=@${_time} +%d-%m-%Y)}
+	if [[ -z ${_altDate:-} ]]; then
+		_dateHuman="$(date --date=@${_time} '+%d %b %Y')"
+	else
+		_dateHuman=${_altDate}
+	fi
+	local _key
+	local _state
+	local _path
+	if [[ -z ${_workingParams} ]]; then
+		_recipient=$(_listRecipients)
+	#	while IFS='' read -d $'\n' -r -p "$(_ask "new epistle addressed ${yellow}to whom${reset}? [f to find] ")" -e _recipient; do
+#			case "${_recipient}" in
+#				h|help|\?)
+#					_info "enter the name of the person to whom the letter shall be addressed"
+#					;;
+#				q)
+#					_info "try again later when you know to whom you are writing"
+#					return
+#					;;
+#				f)
+#					_recipient=$(_listRecipients) && break || continue
+#					;;
+#				*)
+#					[[ -z "${_recipient}" ]] && { _warn "empty name not allowed"; continue; }
+#					break
+#					;;
+#			esac
+#		done
+	else
+		_recipient=${_workingParams}
+	fi
+	_validateName "${_recipient}" || { _error "name '${_recipient}' not allowed"; return 1; }
+	local _key="${_recipient}_${_date}"
+	local _state="intent"
+	local _path="${_epistleDir}/${_state}/${_key}"
+	test -f "${_path}" && { _warn "intent exists"; return; }
+	test -f "${_epistleDir}/draft/${_key}" && { _warn "draft '${_key}' exists; use edit"; return; }
+	# seed the file
+	local _header="$(printf "%60s\n\n%s,\\\n\\\n" "${_dateHuman}" "${_recipient}")"
+	echo -e "${_header}" > "${_path}"
+	vim "+normal G$" "${_path}"
+	# check if anything was added to the seeded file
+	if cmp -s "${_path}" <( echo -e "${_header}" ); then
+		_warn "nothing to save"
+		rm "${_path}"
+		return
+	else
+		local _draft="${_epistleDir}/draft/${_key}"
+		local _pathspec="draft/${_key}"
+		mv "${_path}" "${_draft}"
+		git -C "${_epistleDir}" --git-dir="${_epistleGitDisk}" add "${_pathspec}"
+		git -C "${_epistleDir}" --git-dir="${_epistleGitDisk}" commit -q -m "saved draft to ${_recipient} (${_dateHuman})" "${_pathspec}" && _info "changes to '${_key}' saved" || _error "changes not saved!"
+	fi
+}
+
+_list() {
+	# filter stuff into fzf
+	local _fzfPrompt="--prompt=TYPE-TO-FILTER>"
+	local _fzfColor="--color=bg:#111111,preview-bg:#222222,prompt:yellow"
+	local _fzfHeader="--header=choose from the list above"
+	find draft print sent -type f | fzf ${_fzfColor} --preview-window=up,70%,wrap --preview='cat {}'
+}
+
+_listRecipients() {
+	# lists and sorts all known recipient names
+	# uses fzf --print-query...can select from known name or enter a new one
+	find draft print sent -type f | cut -f2 -d/ | cut -f1 -d_ | uniq | sort | fzf --print-query | tail -1
+}
+
+_edit() {
+	local _key
+	local _state
+	local _path
+	_key=$(_list) || { _warn "invalid selection"; return; }
+	_state=${_key%%/*}
+	vim "+normal G$" "${_key}"
+	# next...need to know if the file changed since the last commit
+	if ! git -C "${_epistleDir}" --git-dir="${_epistleGitDisk}" diff --quiet --exit-code "${_key}"; then
+		git -C "${_epistleDir}" --git-dir="${_epistleGitDisk}" commit -m "edited ${_key}" "${_key}"
+	fi
+}	
+
+############################
+# CREATE
+############################
+
+_create() {
+	# create a new resume database
+	local _gitUserName=$(git config --global --get user.name)
+  local _gitUserEmail=$(git config --global --get user.email)
+	local _resumeDisk=${_resumeGitDisk}
+  trap _irishExit SIGINT
+	_ask "enter studio name ["${_studioDirName}"] "
+	read _studioName
+	[ -z "${_studioName}" ] || _studioDirName="${_studioName}"
+	_ask "enter resume name ["${_resumeDirName}"] "
+	read _resumeName
+	[ -z ${_resumeName} ] || _resumeDirName="${_resumeName}"
+ _ask "enter preferred username [${_gitUserName}] "
+  read _userName
+  [ -z ${_userName} ] && _userName="${_gitUserName}"
+  _ask "enter preferred email [${_gitUserEmail}] "
+  read _userEmail
+  [ -z ${_userEmail} ] && _userEmail="${_gitUserEmail}"
+	_setEnv
+	_info "studio dir name: ${_studioDirName}"
+	_info "studio path: ${_studioDir}"
+	_info "resume path: ${_resumeDir}"
+	_info "resume gitdisk: ${_resumeGitDisk}"
+	_info "resume user name: ${_userName}"
+	_info "resume user email: ${_userEmail}"
+	read -rsn1 -p "$(_ask 'proceed? (y/n)')" _yn
+	echo
+	[[ "$_yn" != "y" ]] && { _error "aborting"; exit 1; }
+	[ ! -d "${_resumeDir}" ] && mkdir -p "${_resumeDir}"
+	git init -q -b main "${_resumeDir}"
+	git config --global includeif.gitdir:"${_resumeGitDisk}".path "${_resumeGitDisk}/.gitconfig"
+	git config --file="${_resumeGitDisk}"/.gitconfig user.name "${_userName}"
+	git config --file="${_resumeGitDisk}"/.gitconfig user.email "${_userEmail}"
+	touch ${_logFile}
+	echo "resume.log" > "${_resumeDir}/.gitignore"
+	echo "intent/" >> "${_resumeDir}/.gitignore" 
+	git -C "${_resumeDir}" --git-dir="${_resumeGitDisk}" add .gitignore
+	git -C "${_resumeDir}" --git-dir="${_resumeGitDisk}" commit -m "[genesis] created by ${_userName}"
+	mkdir "${_epistleDir}/draft"
+	mkdir "${_epistleDir}/sent"
+	mkdir "${_epistleDir}/published"
+}
+
+###############
+###### SHELL
+###############
+
+_shell() {
+	# enter (cd) into studio environment
+	# change the command history file
+	# change the prompt dynamically
+	cd "${_resumeDir}" || { _error "can not enter resume"; return 1; }
+	HISTFILE="${_studioDir}/.resume_history"
+	HISTSIZE=1000
+	HISTFILESIZE=10000
+	HISTTIMEFORMAT="%s %F %T "
+	HISTCONTROL=ignoreboth
+	shopt -s histappend
+	set -o history
+	local _p
+	local _dirty
+	# confirm exit function
+	_confirmExit() {
+		if _isIndexClean; then
+			exit
+		else
+			_debug "index is dirty"
+			_ask "save session? press ${label}y${reset} to commit changes, ${label}n${reset} to discard changes"
+			while read -r -s -n 1  __confirm; do
+				echo # needed for newline after _ask
+				case ${__confirm} in
+					y)
+						git -C "${_resumeDir}" --git-dir="${_resumeGitDisk}" commit -m "[${self}] $(date) closed"
+						exit
+						;;
+					n)
+						exit
+						;;
+					*)
+						_mainPrompt
+						;;
+				esac
+			done
+		fi
+	}
+	# print welcome function
+	_displayWelcome() {
+	cat <<HEREDOC
+                                            
+ *RESUME*
+
+resume: type ${green}help${reset} for guidance
+        type ${red}stop${reset} to leave
+
+HEREDOC
+	}
+	# print usage
+	_printShellUsage() {
+		_printUsage
+	}
+	# main shell prompt function
+	_mainPrompt() {
+	#
+	# ignore ctrl+\ ctrl+z and ctrl+c
+	trap '' SIGQUIT SIGTSTP SIGINT SIGTERM
+	_p() {
+		# sets the prompt
+		# colors cannot derive from tput here...as 'read -e' becomes confused
+		reset=$'\001\e[0m\002'
+		red=$'\001\e[00;31m\002'
+		yellow=$'\001\e[00;33m\002'
+		green=$'\001\e[00;32m\002'
+		_cH=$'\001\e[00;45m\002'
+		_cG=$'\001\e[00;7m\002'
+		_cU=$'\001\e[00;32m\002'
+		_cS=$'\001\e[00;33m\002'
+		_index="${green}o${reset}"
+		_isIndexClean || _index="${red}x${reset}"
+		_buffer="${green}+${reset}"
+		_isBufferClean || _buffer="${red}-${reset}"
+		_headRev=$(git ${_git} rev-parse --short HEAD)
+		_u=$(git ${_git} config --get user.name)
+		echo -n "${_cH}${_studioDirName}${reset}:${_cG}${_resumeDirName}${reset} ${_cU}${_u}${reset} [${_cS}${_headRev}${reset}] ${_buffer}${_index} > "
+	}
+	local __input
+	while IFS='' read -r -d $'\n' -p "$(_p)" -e __input || true; do
+		history -s "${__input}"
+		if [[ -z "${__input}" ]]; then
+			true
+		elif [[ ${__input} =~ [[:cntrl:]] ]]; then
+			_warn "control char found"
+		elif [[ ${__input} == $'\e' ]]; then
+			_warn "no escape" && true
+		elif [[ "${__input}" =~ (^stop$|^quit$|^exit$|^q$) ]]; then
+			_confirmExit
+		elif [[ "${__input}" =~ (^help$|^h$|^\?$) ]]; then
+			_printShellUsage
+		elif [[ "${__input}" =~ (^list$|^l$) ]]; then
+			_list || true
+		elif [[ "${__input}" =~ (^print$|^p$) ]]; then
+			_print
+		elif [[ "${__input}" =~ ^git ]]; then
+			# pass git commands back through epistle script
+			_gitCommand=(${__input})
+			git ${_gitWT} ${_gitCommand[@]:1} || :
+		elif [[ "${__input}" =~ (^new$|^n$) ]]; then
+			eval "${self}" "${_originalParameters}" new || true
+		elif [[ "${__input}" =~ (^edit$|^e$) ]]; then
+			eval "${self}" "${_originalParameters}" edit || true
+		else
+			eval "${self}" "${_originalParameters}" "${__input}" || :
+		fi
+	done
+	}
+	_displayWelcome
+	_mainPrompt
+}
+
+main() {
+	# what are we trying to do (read all the positional parameters and set VARS)
+	_getOpts "${@}"
+	_debug "${FUNCNAME}: parameters read: ${*}"
+	_debug "${FUNCNAME}: paired-down parameters: $_workingParams"
+	_getSubcommand $_workingParams
+	_debug "${FUNCNAME}: _subCommand: ${_subCommand:-}"
+	_debug "${FUNCNAME}: remaining args: $_workingParams"
+	# setup the environment after processing all command line parameters
+	_setEnv
+	# reinitialize log functions after processing all command line options
+	_fLOG
+	# validate the environment
+	# TODO figure out a better means of knowing
+	# 1. is this an interactive shell session
+	# 2. is this part of a pipe
+	# 3. are we in our custom interactive shell (and does that matter?)
+	# set up logging and stdout stderr etc with traps
+	# possibly check for tty?
+	[[ -t 1 ]] && _debug 'STDOUT is attached to TTY'
+	[[ -t 0 ]] || _debug 'STDIN is attached to pipe'
+	[[ -p /dev/stdout ]] && _debug 'STDOUT is attached to a pipe'
+	[[ ! -t 1 && ! -p /dev/stdout ]] && _debug 'STDOUT is attached to a redirection'
+	_isEnvSufficient || { _error "cannot run until these problems are resolved"; return 1; }
+	# set the global _user vars
+	#_userSet
+	# set up traps now	
+	#trap _irishExit EXIT
+	# run germ shell if no arguments
+	[ -z "${_subCommand:-}" ] && _shell
+	# ctrl-d exits out of the last command...the trap set in the _shell catches
+	# the EXIT signal, and runs.  but by now, we're toast.  ctrl-d must be caught
+	# earlier in order to be able to pass the commands back to the master script.
+	# it's a handy trick but may be unnecessary
+	# otherwise, pass the commands to the called "command"
+	_debug "now calling the eval to run '${_subCommand:-}'"
+	[ -n "${_subCommand:-}" ] && eval _"${_subCommand}" || exit
+}
+main "${@}"
