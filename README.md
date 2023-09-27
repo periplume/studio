@@ -14,7 +14,7 @@ It is the result of scratching my own itch.
 
 It is the product of much thought and many false starts.
 
-It is idisyncratic at best, or worst.
+It is idiosyncratic at best, or worst.
 
 The problem this project aspires to solve is this: make the tool
 for writing as simple and powerful as possible without burdening

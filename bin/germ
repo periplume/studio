@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # file: germ
-# source: https://github.com/periplume/dotfiles.git
+# source: https://github.com/periplume/studio.git
 # author: jason@bloom.us
+# description: note taking tool
+
 # SCRIPT AND SHELL SETTINGS
 set -o errexit  # set -e
 set -o nounset
@@ -12,7 +14,7 @@ set -o pipefail
 ###########################
  
 # required commands
-_requiredCommands=(git gitdisk dsink vipe fzf)
+_requiredCommands=(git gitdisk dsink vipe fzf ffplay ffmpeg)
 
 # recommended commands
 _recommendedCommands=(git-sizer tig)
@@ -31,7 +33,7 @@ _studioDirName=studio
 # germ lives inside studio (into which it is designed to publish)
 _germDirName=germ
 # get the name of the script itself
-self=$(basename $0)
+self=$(basename "$0")
 
 # USER NAME
 # the git username and email are used to create a short hash which identifies
@@ -339,7 +341,7 @@ _getSubcommand() {
 			edit)
 				_debug "${FUNCNAME}: '$1' called, checking for $1 flags"
 				_subCommand=$1
-				_getEditOpts
+				_getEditOptions
 				return
 				;;
 			create)
@@ -640,11 +642,11 @@ _add() {
 	[[ -z "${_germString}" ]] && { _error "no empty strings allowed"; return; }
 	_commitMsgString=$(_buildCommitMsg "${_germString}") || _commitMsgString="empty commit msg"
 	# set up primary key namespace mapping
-	#_primaryKey=$(_getNewKey) || _error "could not get a new unique key"
+	_primaryKey=$(_getNewKey) || _error "could not get a new unique key"
 	# ADD the BLOB...get the BLOB id
 	_blobID=$(git ${_git} hash-object --stdin -w <<< "${_germString}")
 	# map blob to primary key in a/
-	#_mapBlob ${_blobID} ${_primaryKey}
+	_mapBlob ${_blobID} ${_primaryKey}
 	# map blob to the source namespace
 	_mapBlob ${_blobID} c/${_currentSource}/cat/${_blobID}
 	# map tags
@@ -662,9 +664,10 @@ _add() {
 }
 
 _edit() {
-	# arg 1 = blobID
+	# arg 1 = blobID to edit
 	local _germString
 	local _commitMsgString
+	local _blobID
 	# find the source
 	# read the blob in
 	# load the blob into vipe for editing
@@ -675,9 +678,27 @@ _edit() {
 	# remove the $1 blob from the _currentSource list
 	# run _mapTags
 	# commit 
-	_germString=$(vipe $(_printBlob ${1}))
+	_germString=$(_printBlob ${1} | EDITOR=vim vipe)
 	[[ -z "${_germString}" ]] && { _warn "empty entries not allowed"; return; }
+	[[ "${_germString}" == "$(_printBlob ${1})" ]] && { _warn "no changes detected"; return; }
+	_commitMsgString=$(_buildCommitMsg "${_germString}") || _commitMsgString="empty commit msg"
+	_blobID=$(git ${_git} hash-object --stdin -w <<< "${_germString}")
+	if _isSourceSet; then
+		_currentSource=$(_getSource)
+	else
+		_currentSource="default"
+	fi
+	# delete the key for the old source
+	_deleteKey c/${_currentSource}/cat/${1}
+	_mapBlob ${_blobID} c/${_currentSource}/cat/${_blobID}
+	_mapTags $_blobID
+	_doCommit "${_commitMsgString}"
 }	
+
+_test() {
+	_currentSource=$(_getSource)
+	_deleteKey c/${_currentSource}/cat/886c292f3bb86a1cd64c1b07b6f2a9211f7efb1c
+}
 
 _buildCommitMsg() {
 	# arg 1 = string [required]
@@ -1431,9 +1452,6 @@ _isSourceOpen() {
 	_doesKeyExist c/${_source}/self.closed && return 1 || return 0
 }
 
-_test() {
-	_isSourceOpen $(_getSource) && echo "source is open" || echo "source is closed"
-}
 
 # source status modes
 # open (can add, rename, edit, close)
@@ -1620,6 +1638,7 @@ _source() {
 			esac
 		done
 	}
+
 
 	##########################
 	### MENU FUNCTIONS
@@ -1833,6 +1852,113 @@ _source() {
 	_mainMenu
 }
 
+# run the dictate window
+_dictate() {
+	local _currentSource=$(_getSource)
+	local _recordingState="waiting"
+	local _coproc_pid="none"
+	local _mnimeo_dir="${_studioDir}/nmimeo"
+	local _mnimeo_
+	# states: waiting, recording, paused
+	_cStat() {
+		[[ "${1}" =~ ^(recording) ]] && tput setaf 2 #make bg=reg text=white
+		[[ "${1}" =~ ^(waiting) ]] && tput setaf 3
+		[[ "${1}" =~ ^(paused) ]] && { tput blink; tput setaf 3; }
+		[[ "${1}" =~ ^(unknown) ]] && { tput blink; tput setaf 2; }
+		[[ "${1}" =~ ^(transcribing) ]] && { tput blink; tput setaf 4; }
+		echo -n "${1}"
+		tput sgr0
+	}
+	_doRecord() {
+		local oFmt="wav"
+		#ffmpeg -loglevel error -progress - -nostats -hide_banner -f pulse -i default output."${oFmt}"
+		#ffmpeg -loglevel error -progress - -nostats -hide_banner -f alsa -i hw:1 output."${oFmt}"
+		ffmpeg -loglevel error -progress - -nostats -hide_banner -f alsa -i hw:1 -sample_rate 44100 output."${oFmt}"
+		# the above command with the logitech usb webcam and microphone works with
+		# the pause/resume function (for some reason, using the laptop built-in mic
+		# and both -f pulse and -f alsa do not pause.  arecord indicated that PAUSE
+		# was not supported (PAUSE command ignored (no hw support))
+	}
+	_doTranscribe() {
+		local model="medium.en"
+		whisper output.wav --language en --verbose False --model medium.en --suppress_tokens '' -o . -f txt 2>&1 >/dev/null
+		}
+	_showMenu() {
+		clear
+		echo -ne "
+
+DICTATE MACHINE:
+current source: ${_currentSource}
+source count: $(_getSourceCount ${_currentSource})
+state: $(_cStat ${_recordingState}) (pid='${_coproc_pid}')
+token key words: quote, unquote, hash, underscore, dash
+
+r) record
+p) pause/resume
+a) abort recording
+s) stop and save
+c) change source
+q) quit
+
+"
+	}
+	# main loop for menu screen
+	_showMenu
+	while read -r -s -n1 -p"$(_ask 'enter selection') " _selection; do
+		echo
+		case ${_selection} in
+			r)
+				# don't allow multiple recordings
+				[[ ${_recordingState} != "waiting" ]] && continue
+				_recordingState="recording"
+				# run the _doRecord function as a coprocess
+				coproc _doRecord
+				# get the actual pid of the ffmpeg so we can signal it directly
+				_coproc_pid=$(ps --no-headers -o pid --ppid ${COPROC_PID})
+				;;
+			p)
+				# check the state of the recording process
+				proc_state=$(ps --no-headers -o stat ${_coproc_pid})
+				# toggle STOP/CONT signal to ffmpeg
+				if [[ ${proc_state:0:1} == "T" ]]; then
+					# recording is paused; resume
+					kill -SIGCONT ${_coproc_pid}
+					_recordingState="recording"
+				elif [[ ${proc_state:0:1} == "S" ]]; then
+					# recording is live; pause
+					kill -SIGSTOP ${_coproc_pid}
+					_recordingState="paused"
+				else
+					# recording is in unknown state
+					_recordingState="unknown"
+				fi
+				;;
+			a)
+				# kill the recording and delete the audio file
+				kill -SIGINT ${_coproc_pid}
+				_recordingState="waiting"
+				_coproc_pid="none"
+				rm output.wav
+				;;
+			s)
+				# stop recording and begin the transcription
+				kill -SIGINT ${_coproc_pid}
+				_recordingState="transcribing"
+				coproc _doTranscribe
+				_coproc_pid=$(ps --no-headers -o pid --ppid ${COPROC_PID})
+				;;
+			c)
+				_currentSource=$(_getSourceList | fzf --header="select the source")
+				;;
+			q)
+				return
+				;;
+		esac
+		[[ $(ps --no-headers ${_coproc_pid}) ]] || { _recordingState="waiting"; _coproc_pid=''; }
+		_showMenu
+	done
+}
+
 _printTagEntities() {
 	# arg 1 = source
 	git ${_git} ls-files t/*
@@ -2018,13 +2144,17 @@ __search() {
 _browse() {
 	# arg 1 = source
 	local _entityList
+	local _editRequest
 	local _fzfColor="--color=bg:#222222,preview-bg:#333333,header:yellow"
 	_entityList=($(_printSourceEntities ${1}))
 	_debug "_browse '${1}' which has '${#_entityList[@]}' entities"
 	x=0
 	echo "==== entity $x ======="
 	_entity=$(_readKey ${_entityList[$x]}) || { _warn "nothing to see"; return; }
-	_printSourceEntities ${1}  | fzf ${_fzfColor} --preview-window=85% --exact --preview '_printBlob {}'
+	#_printSourceEntities ${1}  | fzf ${_fzfColor} --preview-window=85% --exact --preview '_printBlob {}'
+	_editRequest=$(_printSourceEntities ${1}  | fzf ${_fzfColor} --preview-window=85% --exact --preview '_printBlob {}')
+	#echo "request to edit $_editRequest"
+	_edit ${_editRequest}
 }
 
 ###############
@@ -2087,7 +2217,8 @@ HEREDOC
 	_printShellUsage() {
 		cat << EOF
 
-  add        add a new germ entry
+  add        add a new germ entry (editor)
+  dictate    add a new germ entry (dictate)
   list       list the tag catalog
   search     interactive search
   browse     read through the current source entities
@@ -2161,8 +2292,10 @@ EOF
 			_isIndexClean || _warn "DIRTY INDEX"
 		elif [[ "${__input}" =~ (^add$|^a$) ]]; then
 			eval "${self}" "${_originalParameters}" add || true
-		elif [[ "${__input}" =~ (^source$|^s$) ]]; then
+		elif [[ "${__input}" =~ (^source$) ]]; then
 			_source
+		elif [[ "${__input}" =~ (^dictate$|^d$) ]]; then
+			_dictate
 		else
 			# send the command (with the original command parameters) back to the
 			# calling script

@@ -11,7 +11,7 @@ _defaultPublishURL=jkl.bloom.us
 ###########################
 
 # required commands
-_requiredCommands=(git gitdisk dsink vipe fzf)
+_requiredCommands=(git fzf make)
 
 # recommended commands
 _recommendedCommands=(git-sizer tig)
@@ -191,6 +191,10 @@ _getSubcommand() {
 				_subCommand=$1
 				return
 				;;
+			create)
+				_subCommand=$1
+				return
+				;;
 			test)
 				_subCommand=$1
 				return
@@ -246,17 +250,35 @@ _isEnvSufficient() {
 			_debug "${FUNCNAME}: ${_required} found"
 		fi
 	done
-	# check for resume dir (unless we are running create)
-	if [ ! -d "${_resumeDir}" ]; then
-		if [ -z "${_subCommand:-}" ]; then
-			_error "found no ${_resumeDir}; run 'resume create' first"
-		 	return 1
-		elif [ ! ${_subCommand:=} = "create" ]; then
-			_error "found no ${_resumeDir}; run 'resume create' first"
-			_sufficient=false
-		fi
-	fi
 	[ ${_sufficient} = true ] && return 0 || return 1
+}
+	
+
+# check for resume dir (unless we are running create)
+#	if [ ! -d "${_resumeDir}" ]; then
+#		if [ -z "${_subCommand:-}" ]; then
+#			_error "found no ${_resumeDir}; run 'resume create' first"
+#		 	return 1
+#		elif [ ! ${_subCommand:=} = "create" ]; then
+#			_error "found no ${_resumeDir}; run 'resume create' first"
+#			_sufficient=false
+#		fi
+#	fi
+#	[ ${_sufficient} = true ] && return 0 || return 1
+#}
+
+_isRepoCreated() {
+	# check $_resumeDir
+	[ ! -d ${_resumeDir} ] && { _error "${_resumeDir} does not exist"; return 1; }
+}
+
+_doesDirExist() {
+	# check if the specified DIR ($_resumeDir) exists
+	# check if it is a resume-created git
+	# return 1 if missing or not git
+	if [ -d ${_resumeDir} ]; then
+		echo "resume dir exists, check for resume marker"
+	fi
 }
 
 #################################
@@ -464,12 +486,11 @@ _create() {
 	git config --file="${_resumeGitDisk}"/.gitconfig user.email "${_userEmail}"
 	touch ${_logFile}
 	echo "resume.log" > "${_resumeDir}/.gitignore"
-	echo "intent/" >> "${_resumeDir}/.gitignore" 
 	git -C "${_resumeDir}" --git-dir="${_resumeGitDisk}" add .gitignore
 	git -C "${_resumeDir}" --git-dir="${_resumeGitDisk}" commit -m "[genesis] created by ${_userName}"
-	mkdir "${_epistleDir}/draft"
-	mkdir "${_epistleDir}/sent"
-	mkdir "${_epistleDir}/published"
+	mkdir "${_resumeDir}/draft"
+	mkdir "${_resumeDir}/sent"
+	mkdir "${_resumeDir}/published"
 }
 
 ###############
@@ -611,6 +632,7 @@ main() {
 	[[ -p /dev/stdout ]] && _debug 'STDOUT is attached to a pipe'
 	[[ ! -t 1 && ! -p /dev/stdout ]] && _debug 'STDOUT is attached to a redirection'
 	_isEnvSufficient || { _error "cannot run until these problems are resolved"; return 1; }
+	_isRepoCreated || { _error "resume repo has not been created; run create"; return; }
 	# set the global _user vars
 	#_userSet
 	# set up traps now	

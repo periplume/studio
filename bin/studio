@@ -19,7 +19,17 @@ source studio-lib.sh
 
 _fLOG
 # the log/console functions instantited now will be re-initialized after all the
-# command line parameters are processed
+# command line parameters are processed, ie modified by flags
+
+# BEHAVIOR
+
+# debugging and logging settings
+# script debug toggle (set to true to enable default global debugging)
+_DEBUG=false
+# silent mode for scripting (supresses all output)
+_SILENT=false
+# logging facility
+_LOG=false
 
 ###########################
 # PREREQUISITES
@@ -51,15 +61,6 @@ self=$(basename $0)
 # places.  it can be overridden here.
 #_user=e291
 
-# BEHAVIOR
-
-# debugging and logging settings
-# script debug toggle (set to true to enable default global debugging)
-_DEBUG=false
-# silent mode for scripting (supresses all output)
-_SILENT=false
-# logging facility
-_LOG=false
 
 ####################################
 # HELPER FUNCTIONS
@@ -258,6 +259,117 @@ _getAddOpts() {
 	export _workingParams=$*
 }
 
+_name() {
+	# the thing naming function
+	local _newName
+	# define min and max lengths of the thing to name
+	export _minLength=1
+	export _maxLength=80
+	_isNameNew() {
+		# arg 1 = proposed new name
+		# return 0 if new, 1 if not
+		[[ -z "${1}" ]] && return 1
+		_existingNames=$(ls .)
+		for e in ${_existingNames}; do
+			if [ "${1}" = "${e}" ]; then
+				return 1
+			fi
+		done
+		return 0
+		}
+	export -f _isNameNew
+	_fzfPreviewWindow() {
+			# function used within fzf preview window to assist in the selection of a
+      # new project name
+      local _proposedName
+      local lengthStatus
+      local unique
+      local allowedChars="n/a"
+      local lead="n/a"
+      local last="n/a"
+      local repeat="n/a"
+      local acceptable="NO"
+			_cStat() {
+        # arg 1 = key word
+        # print the key word in a set color
+        [[ "${1}" =~ ^(YES|OK) ]] && tput setaf 2
+        [[ "${1}" =~ ^(NO|TOO) ]] && tput setaf 1
+        [[ "${1}" =~ ^(n/a) ]] && tput setaf 3
+        echo -n "${1}"
+        tput sgr0
+      }
+			# export to fzf for --preview
+      export -f _cStat
+			# validate the length
+      if [[ ${#1} -lt ${_minLength} ]]; then
+        lengthStatus="TOO SHORT"
+      elif [[ ${#1} -gt ${_maxLength} ]]; then
+        lengthStatus="TOO LONG"
+      else
+        lengthStatus="OK"
+      fi
+			# make sure it's new
+      _isNameNew "${1}" && { unique="YES" ; acceptable="YES"; } || { unique="NO" ; acceptable="NO"; }
+			# check the other naming criteria
+			# must start with an alphanumeric character
+			[[ "${1}" =~ ^[[:alpha:]|[:digit:]] ]] && lead="YES" || { lead="NO" ; acceptable="NO" ; }
+			# must end with an alphanumeric character
+      [[ "${1}" =~ [[:alpha:]|[:digit:]]$ ]] && last="YES" || { last="NO" ; acceptable="NO" ; }
+      [[ "${1}" =~ ^([[:alpha:]|[:digit:]]|[ -_.;:?\"\'()&!])*$ ]] && allowedChars="YES" || { allowedChars="NO" ; acceptable="NO" ; }
+      [[ ! "${1}" =~ ([.]|[-]|[_]){2} ]] && repeat="YES" || { repeat="NO" ; acceptable="NO" ; }
+      # print the validation info into the fzf preview window 
+      echo "----VALID NAME?  $(_cStat ${acceptable}) --------------"
+      [[ -z "${1}" ]] && echo "waiting for input..." || echo "name: $(tput setaf 3)${1}$(tput sgr0)"
+      printf "length [%.2d]: %31s\n" ${#1} "$(_cStat "${lengthStatus}")"
+      printf "unique: %36s\n" "$(_cStat "${unique}")"
+      printf "character set allowed: %21s\n" "$(_cStat "${allowedChars}")"
+      printf "first ['%s'] allowed: %23s\n" "${1:0:1}" "$(_cStat "${lead}")"
+      printf "last ['%s'] allowed: %24s\n" "${1:(-1)}" "$(_cStat "${last}")"
+      printf "no non-alpha/num repeats: %18s\n" "$(_cStat "${repeat}")"
+      echo "-----------RULES------------------"
+      echo "the name must be unique"
+      echo "max length is ${_maxLength}, min is ${_minLength}"
+      echo "lower case and numbers only"
+      echo "non alpha-numeric characters allowed:"
+      echo " - dash (-)"
+      echo " - underscore (_)"
+      echo " - dot (.)"
+      echo " ^ these cannot be first or last"
+      echo " ^ cannot be repeated (eg --)"
+			}
+			export -f _fzfPreviewWindow
+			_namePicker() {
+				local _newName="${1}"
+				local _fzfFalse="fzf --bind=enter:print-query --print-query --exact "
+				local _fzfPrompt="--prompt=TYPE-NEW-NAME> --info=hidden"
+				local _fzfColor="--color=bg:#222222,preview-bg:#333333,header:yellow"
+				local _fzfHeader="--header=existing above, guidance right >"
+				local _fzfPreview="--preview=_fzfPreviewWindow {q} {}"
+				local _fzfPreviewWin="--preview-window=right,40%,border-double,wrap"
+				local _fzfBack="--bind=backward-eof:change-prompt(YAYA-NEW-NAME>)"
+				local _fzfEsc="--bind=esc:clear-query --bind=ctrl-w:toggle-preview-wrap"
+				while true; do
+					_newSourceName=$(_getSourceList | ${_fzfFalse} ${_fzfBack} ${_fzfPreviewWin} ${_fzfEsc} ${_fzfPrompt} "${_fzfColor}" "${_fzfHeader}" "${_fzfPreview}") || { _warn "can't do that"; return; }
+      if _isSourceNameValid "${_newSourceName}"; then
+        read -r -s -n 1 -p "$(_ask "'${_newSourceName}' is valid, create? (y/n/q) ")" _ynq
+        echo
+        [[ "${_ynq:-}" = "y" ]] && break
+        [[ "${_ynq:-}" = "q" ]] && return
+        [[ "${_ynq:-}" = "n" ]] && continue
+      else
+        _error "'${_newSourceName}' is not a valid name"
+        _ask "try again? (y/n) "
+        read -r -s -n1  _yn
+        echo
+        [[ "${_yn:-}" = "y" ]] && continue
+        [[ "${_yn:-}" = "n" ]] && return
+      fi
+    done
+    eval ${__name}=${_newSourceName}
+  }
+	_namePicker _newName
+}
+
 _search() {
 	local _query="${*:-}"
 	local _rg="rg --line-number --no-heading --color=always --smart-case -g '!*.ps' --multiline --text "
@@ -329,6 +441,13 @@ _shell() {
 		_dsinkMediaName="${green}$(dsink status -m)${reset}" || _dsinkMediaName="${red}none${reset}"
 		echo ${_dsinkMediaName}
 	}
+	_findDsinkDisk() {
+		# check to see if a usb has been inserted and needs authenticating/mounting
+		# if _getDsinkMedia returns "none" then check for device and begin
+		# _mountDsinkDevice
+		# if deice is detected, run _mount, otherwise return 0
+		echo "not implemented"
+		}
 	_printStudioContents() {
 		# the dynamic menu
 		# list the subdirectories inside studio
@@ -376,6 +495,8 @@ _shell() {
   w    wordnet lookup
   g    germ
   e    epistle
+  r    resume
+  n    name a new thing
   s    search
   m    mount dsink usb
   u    unmount dsink usb
@@ -423,6 +544,9 @@ _shell() {
 			m)
 				dsink mount || { _warn "could not mount dsink usb"; continue; }
 				;;
+			n)
+				_name || :
+				;;
 			u)
 				dsink unmount
 				;;
@@ -435,6 +559,11 @@ _shell() {
 				printf '\e[?5h'; sleep 0.2 ; printf '\e[?5l'
 				clear
 				epistle
+				;;
+			r)
+				printf '\e[?5h'; sleep 0.2 ; printf '\e[?5l'
+				clear
+				resume
 				;;
 			s)
 				_search || :
@@ -527,5 +656,6 @@ main() {
 	_isEnvSufficient || { _error "cannot run until these problems are resolved"; return 1; }
 	# run shell if no arguments
 	[ -z "${_subCommand:-}" ] && _shell
+	_warn "${_subCommand} called, but that function doesn't exist"
 }
 main "${@}"
