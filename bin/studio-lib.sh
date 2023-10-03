@@ -33,9 +33,9 @@ prompt=$(tput setab 5; tput setaf 7)
 
 # TODO functionalize colorizing
 
-################################
-# LOGGING AND CONSOLE MESSAGES
-################################
+##################################################
+# LOGGING AND CONSOLE MESSAGES AND USER INTERFACE
+##################################################
 
 # user output: types
 # name		description														display
@@ -46,16 +46,17 @@ prompt=$(tput setab 5; tput setaf 7)
 # error		not allowed														white text, red bg
 # fatal		error and exiting (out of trap)				black text, red bg, bold text?
 # ask			ask user for input										white text, cyan bg
+#
 #	always expect fresh new line
 # exception...after ask...in which case, take care of that immediately
-# suppress if _SILENT=true
+# suppress all if _SILENT=true
 #
 # call as
 # _warn "message"
 # _info "message"
 
-# _fLOG creates logging functions based on
-# the static features: (global variables)
+# _fLOG creates logging functions based on runtime switches (command options)
+# and static features: (defaults and global variables)
 #
 # the three main determinants:
 # _SILENT= true | false
@@ -69,7 +70,7 @@ prompt=$(tput setab 5; tput setaf 7)
 
 _fLOG() {
 	# collapsing function...sets up according to the static determinants
-	# creates all log functions
+	# creates all log functions dynamically
 	# _debug
 	# _info
 	# _warn

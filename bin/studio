@@ -60,6 +60,8 @@ self=$(basename $0)
 # the user in the namespace.  it is set as a global variable and used in various
 # places.  it can be overridden here.
 #_user=e291
+# OVERLY compliated above
+_user=$(whoami)
 
 
 ####################################
@@ -522,7 +524,7 @@ _shell() {
 		_cU=$'\001\e[00;32m\002'		#user
 		_cS=$'\001\e[00;33m\002'		#source
 		_data="$(_getRF-1)$(_getRF-2)$(_getRF-3)$(_getRF-4)$(_getRF-5)"
-		echo -n "${_cH}${_studioDirName}${reset}:${_cU}jason${reset} [${_data}:$(_getDsinkMedia)] > "
+		echo -n "${_cH}${_studioDirName}${reset}:${_cU}${_user}${reset} [${_data}:$(_getDsinkMedia)] > "
 	}
 	local __input
 	# simple one character interface

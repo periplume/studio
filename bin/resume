@@ -33,7 +33,6 @@ _fLOG
 # defaults (from the studio-lib.sh file) will be used initially, which can be
 # overriden below in BEHAVIOR
 
-
 ###########################
 # ENVIRONMENT SETTINGS
 ###########################
@@ -49,6 +48,10 @@ _studioDirName=studio
 _resumeDirName=resume
 # get the name of the script itself
 self=$(basename $0)
+
+# NAMESPACE
+# /_state/_key
+_stateList="intent draft published sent"
 
 # BEHAVIOR
 
@@ -81,11 +84,19 @@ alternate env settings:
  -a <name>  set the resume dir name to <name>
  -w <name>  set the master studio dir to <name> (assumes \$HOME/<name>)
 
+EOF
+}
+
+_printCommands () {
+	cat << EOF
+
 commands:
  new                 create a new resume or cover letter
  edit                edit an existing resume or cover letter
+ delete              remove a resume (from the working space)
+ import              import an external document
  publish             publish resume to ${_defaultPublishURL}
- list                list resumes
+ list                browse documents
  inspect             run tig on the repo
 
 EOF
@@ -175,7 +186,6 @@ _getSubcommand() {
 			edit)
 				_debug "${FUNCNAME}: '$1' called, checking for $1 flags"
 				_subCommand=$1
-				#_getEditOpts
 				return
 				;;
 			list)
@@ -200,7 +210,8 @@ _getSubcommand() {
 				return
 				;;
 			*)
-				_error "${FUNCNAME}: '${1}' is not a subcommand"
+				#_error "${FUNCNAME}: '${1}' is not a subcommand"
+				_error "'${1}' is not a valid command"
 				return 1
 				;;
 		esac
@@ -253,31 +264,42 @@ _isEnvSufficient() {
 	[ ${_sufficient} = true ] && return 0 || return 1
 }
 	
-
-# check for resume dir (unless we are running create)
-#	if [ ! -d "${_resumeDir}" ]; then
-#		if [ -z "${_subCommand:-}" ]; then
-#			_error "found no ${_resumeDir}; run 'resume create' first"
-#		 	return 1
-#		elif [ ! ${_subCommand:=} = "create" ]; then
-#			_error "found no ${_resumeDir}; run 'resume create' first"
-#			_sufficient=false
-#		fi
-#	fi
-#	[ ${_sufficient} = true ] && return 0 || return 1
-#}
-
-_isRepoCreated() {
-	# check $_resumeDir
-	[ ! -d ${_resumeDir} ] && { _error "${_resumeDir} does not exist"; return 1; }
-}
-
 _doesDirExist() {
 	# check if the specified DIR ($_resumeDir) exists
 	# check if it is a resume-created git
 	# return 1 if missing or not git
-	if [ -d ${_resumeDir} ]; then
-		echo "resume dir exists, check for resume marker"
+	# mind condition: if subcommand is create
+	if [[ ${_subCommand:=} = "create" ]]; then
+		if [ -d ${_resumeDir} ]; then
+			_warn "${_resumeDir} already exists; cannot create"
+			_subCommand=null
+			return 1
+		fi
+	elif [ -d ${_resumeDir} ]; then
+		if [ -f ${_resumeGitDisk}/description ]; then
+			# the git description file exists, lets check it for our marker
+			read -r _desc<${_resumeGitDisk}/description
+			if [[ ${_desc} = "${_studioDirName}:${_resumeDirName}" ]]; then
+				# if repo does exist, return 0
+				_debug "${_resumeGitDisk}/description = ${_desc}"
+			else
+				# if repo does not exist, warn and exit
+				_error "${_resumeDir} exists and is NOT a studio-created repo"
+				return 1
+			fi
+		else
+			_error "${_resumeDir} exists and is NOT a git repo"
+			_error "move existing ${_resumeDir} before proceeding"
+			return 1
+		fi
+	else
+		# dir does not exist
+		_warn "${_resumeDir} does not exist"
+		read -rsn1 -p "$(_ask 'create resume repo now? [y/n]')" _yn
+		echo
+		[[ ${_yn} != "y" ]] && { _warn "'resume create' must be executed first"; return 1;  }
+		_create || { _error "could not create resume repo"; return 1; }
+		return
 	fi
 }
 
@@ -327,125 +349,220 @@ _isBufferClean() {
 	[[ -z "$(ls ${_resumeDir}/intent)" ]]
 }
 
+# _report()
+# print a human (or machine) readable health report
+
+# layers to check for consistency
+# vim auto-save files (needs vimrc to be integrated)
+# ls /intent/.*.swp for vim swap files
+# ls -I ".*.swp" /intent/ for files saved in intent but not comitted
+# git index with diff-index
+
+# SPEC
+# new                 create a new resume or cover letter
+# edit                edit an existing resume or cover letter
+# delete              remove a resume (from the working space)
+# import              import an external document
+# publish             publish resume to ${_defaultPublishURL}
+# list                browse documents
+# inspect             run tig on the repo
+
+# new
+# without args...
+# call picker to select name
+# existing name triggers choice
+#  edit existing or derive from selected
+# new name or derived name starts in intent
+# saved moves to draft
+# commit
+
+# edit
+# maybe can remove this...function is in new
+
+# delete
+# call picker to select
+# confirm delete...remove
+# commit
+
+# import
+# call external file picker
+# select file
+# call picker to select name
+# starts in intent
+# saved moves to draft
+# commit
+
+# publish
+# call picker to select name
+# convert to html
+# push to url
+# move key and html to published
+# commit
+
+# list
+# call picker to browse all
+
 ##################################
-# NEW
+# NEW, EDIT, and DERIVE
 ##################################
 
-_validateName() {
-	# function to validate the format of the recipient's name
-	# rules: upper, lower, and digits allowed
-	# space, dot, dash, comma, and apostrophe	allowed
-	# first must be letter (upper or lower)
-	# last must be letter or number
-	# space and non-alpha-numeric characters cannot repeat
-	# IRS allows ampersand and dash
-	# names allow apostrophe, hyphen, period, space
-	# arg 1 = name to evaluate
-	local _valid=true
-	local _lenLimit=60
-	[[ "${1}" =~ ^[[:upper:]|[:lower:]] ]] || \
-		{ _warn "name '${1}' must begin with a letter"; _valid=false; }
-	[[ "${1}" =~ [[:alnum:]]$ ]] || \
-		{ _warn "name '${1}' must end with letter or number"; _valid=false; }
-	[[ ! "${1}" =~ ([.]|[-]|[,]|[\']){2} ]] || \
-		{ _warn "non-alphanumeric [.-,'] characters mustn't repeat"; _valid=false; }
-	[[ ! "${1}" =~ ([ ]){2} ]] || \
-		{ _warn "space character mustn't repeat"; _valid=false; }
-	[[ "${1}" =~ ^([[:alnum:]]|[-,.\' ])*$ ]] || \
-		{ _warn "allowed characters: letters, numbers, comma, dot, dash, apostrophe"; _valid=false; }
-	[[ ${#1} -le ${_lenLimit} ]] || \
-		{ _warn "length (${#1}) exceeds length limit of ${_lenLimit}"; _valid=false; }
-	[[ $_valid = true ]] || return 1
-}
+# options
+# create a brand new resume (from scratch)
+# create a new resume (new name) derived from an existing one
+# edit an existing one
+
+# new flow
+# picker
+# if name is new, start from scratch
+# if name exists, _ask
+#   edit existing
+#   derive new from existing
+
+# editor vim swap files
+# to force swp into /intent
+# add the following to .vimrc
+# set directory^=${_resumeDir}/intent
+
+# TODO
+# path isn't correct when run as cli (shell otoh uses cwd)
 
 _new() {
-	# create a new resume
-	local _recipient
-	local _time=$(date +%s)
-	# if the -d flag was used to specify the date, it is used to name the file and
-	# placed in the date field of the letter
-	_date=${_altDate:-$(date --date=@${_time} +%d-%m-%Y)}
-	if [[ -z ${_altDate:-} ]]; then
-		_dateHuman="$(date --date=@${_time} '+%d %b %Y')"
-	else
-		_dateHuman=${_altDate}
-	fi
+	# create a new document
+	# select an existing to edit or derive
+	# or choose a new name to start from scratch
+	#local _user=${_user:=jkl}
+	local _role="resume"
 	local _key
-	local _state
-	local _path
-	if [[ -z ${_workingParams} ]]; then
-		_recipient=$(_listRecipients)
-	#	while IFS='' read -d $'\n' -r -p "$(_ask "new epistle addressed ${yellow}to whom${reset}? [f to find] ")" -e _recipient; do
-#			case "${_recipient}" in
-#				h|help|\?)
-#					_info "enter the name of the person to whom the letter shall be addressed"
-#					;;
-#				q)
-#					_info "try again later when you know to whom you are writing"
-#					return
-#					;;
-#				f)
-#					_recipient=$(_listRecipients) && break || continue
-#					;;
-#				*)
-#					[[ -z "${_recipient}" ]] && { _warn "empty name not allowed"; continue; }
-#					break
-#					;;
-#			esac
-#		done
+	local _newkey
+	local _seed
+	local _state=intent
+	#_key=$(_picker "specify the name")
+	_key=$(_picker)
+	_info "fzf exit status is $?"
+	_info "got key from fzf: '${_key}'"
+	# check the key name (coming back from fzf...unreliable)	
+	if [[ ${_key} == *"/"* ]]; then
+		# key is in state/key format
+		_info "${_key} found to include state"
+		_newkey=${_key#*/}
+		_state=${_key%/*}
+		_key=${_newkey}
 	else
-		_recipient=${_workingParams}
+		_info "${_key} found to be solo"
+		# key is in key-only format (without state)
+		# should validate name here
+		:
 	fi
-	_validateName "${_recipient}" || { _error "name '${_recipient}' not allowed"; return 1; }
-	local _key="${_recipient}_${_date}"
-	local _state="intent"
-	local _path="${_epistleDir}/${_state}/${_key}"
-	test -f "${_path}" && { _warn "intent exists"; return; }
-	test -f "${_epistleDir}/draft/${_key}" && { _warn "draft '${_key}' exists; use edit"; return; }
-	# seed the file
-	local _header="$(printf "%60s\n\n%s,\\\n\\\n" "${_dateHuman}" "${_recipient}")"
-	echo -e "${_header}" > "${_path}"
-	vim "+normal G$" "${_path}"
-	# check if anything was added to the seeded file
-	if cmp -s "${_path}" <( echo -e "${_header}" ); then
-		_warn "nothing to save"
-		rm "${_path}"
-		return
+	_info "key is ${_key}"
+	_info "state is ${_state}"
+	test -z ${_key} && { _warn "empty name not allowed"; return; }
+	if _doesKeyExist ${_key}; then
+		_state=$(_getKeyState ${_key})
+		_warn "${_key} exists in ${_state}"
+		read -rsn1 -p "$(_ask 'e for edit, n for new derivative')" _en
+		echo
+		if [[ ${_en} = "e" ]]; then
+			_info "edit existing"
+		elif [[ ${_en} = "n" ]]; then
+			# would be nice to pass new header to _picker
+			_seed=${_resumeDir}/${_state}/${_key}
+			_info "seed is ${_seed}"
+			_state=intent
+			_newkey=$(_picker choose-new)
+			# check the key name (coming back from fzf...depends)	
+			if [[ ${_newkey} == *"/"* ]]; then
+				# key is in state/key format
+				_newkey=${_newkey#*/}
+			else
+				# key is in key-only format (without state)
+				:
+			fi
+			_info "new name is ${_newkey}"
+			test -z ${_newkey} && { _warn "empty name not allowed"; return; }
+			[[ ${_newkey} = ${_key} ]] && { _warn "cannot use same name as original '${_key}'"; return; }
+			_key=${_newkey}
+			_info "key is ${_key}"
+		else
+			#_warn "no such command"
+			return
+		fi
 	else
-		local _draft="${_epistleDir}/draft/${_key}"
-		local _pathspec="draft/${_key}"
-		mv "${_path}" "${_draft}"
-		git -C "${_epistleDir}" --git-dir="${_epistleGitDisk}" add "${_pathspec}"
-		git -C "${_epistleDir}" --git-dir="${_epistleGitDisk}" commit -q -m "saved draft to ${_recipient} (${_dateHuman})" "${_pathspec}" && _info "changes to '${_key}' saved" || _error "changes not saved!"
+		_info "${_key} is new"
+		_state=intent
 	fi
+	_path="${_resumeDir}/${_state}/${_key}"
+	_info path:${_path}
+	_info seed:${_seed:-}
+	# need to seed the buffer if _seed is not empty
+	if [[ ! -z ${_seed:-} ]]; then
+		# seed the file into intent
+		_info "seeding ${_path} from ${_seed}"
+		cat ${_seed} > ${_path}
+		vim "+normal G$" "${_path}"
+		# compare the files...if same, then what?
+		# abort, or ask?
+		if cmp -s ${_seed} ${_path}; then
+			_info "${_path} is unchanged (derived from ${_seed}"
+			return
+		else
+			_info "${_path} is different than ${_seed}"
+		fi
+	else
+		# start something from scratch
+		vim "+normal G$" "${_path}"
+	fi
+	# need to allow abort...if vim does not save changes
+	local _draft="${_resumeDir}/draft/${_key}"
+	local _pathspec="draft/${_key}"
+	_info "moving ${_path} to ${_draft}"
+	mv "${_path}" "${_draft}"
+	git -C "${_resumeDir}" --git-dir="${_resumeGitDisk}" add "${_pathspec}"
+	[[ $? != 0 ]] && _warn "git add ${_pathspec} failed" || _info "git add success"
+	git -C "${_resumeDir}" --git-dir="${_resumeGitDisk}" commit -q -m "saved draft of ${_key}"
+	[[ $? != 0 ]] && _warn "git commit failed" || _info "git commit success"
 }
 
-_list() {
-	# filter stuff into fzf
-	local _fzfPrompt="--prompt=TYPE-TO-FILTER>"
-	local _fzfColor="--color=bg:#111111,preview-bg:#222222,prompt:yellow"
-	local _fzfHeader="--header=choose from the list above"
-	find draft print sent -type f | fzf ${_fzfColor} --preview-window=up,70%,wrap --preview='cat {}'
+_doesKeyExist() {
+	# check if the key exists anywhere
+	# arg 1 = key
+	# return 0 if key exists
+	# return 1 if key does not exist
+	for i in ${_stateList[@]}; do
+		test -f ${_resumeDir}/$i/$1 && return 0
+	done
+	return 1
 }
 
-_listRecipients() {
-	# lists and sorts all known recipient names
-	# uses fzf --print-query...can select from known name or enter a new one
-	find draft print sent -type f | cut -f2 -d/ | cut -f1 -d_ | uniq | sort | fzf --print-query | tail -1
-}
-
-_edit() {
-	local _key
+_getKeyState() {
+	# return the key state
+	# arg 1 = key
 	local _state
-	local _path
-	_key=$(_list) || { _warn "invalid selection"; return; }
-	_state=${_key%%/*}
-	vim "+normal G$" "${_key}"
-	# next...need to know if the file changed since the last commit
-	if ! git -C "${_epistleDir}" --git-dir="${_epistleGitDisk}" diff --quiet --exit-code "${_key}"; then
-		git -C "${_epistleDir}" --git-dir="${_epistleGitDisk}" commit -m "edited ${_key}" "${_key}"
-	fi
-}	
+	for i in ${_stateList[@]}; do
+		if test -f ${_resumeDir}/$i/$1; then
+			_state=$i
+		fi
+	done
+	echo ${_state}
+}
+
+_picker() {
+	# arg 1 optional: fzf header (instructions)
+	local _header="${1:-shift-tab: fill query with selected line\nctrl-i|d|p|s|a to view intent|draft|published|sent|all\n}"
+	#local _header="shift-tab: fill query with selected line\nctrl-i|d|p|s|a to view intent|draft|published|sent|all\n"
+	find ${_stateList} -type f | fzf \
+		--no-multi --no-mouse --print-query \
+		--prompt "searching all> " \
+		--header=$'tab: use selected\nctrl-b|d|p|s|a to view intent|draft|published|sent|all\n' \
+		--color=bg:#111111,preview-bg:#222222,prompt:yellow \
+		--bind 'tab:replace-query' \
+		--bind 'enter:print-query' \
+		--bind 'ctrl-a:change-prompt(searching all> )+reload(find intent draft published sent -type f)' \
+		--bind 'ctrl-b:change-prompt(searching intent> )+reload(find intent -type f)' \
+		--bind 'ctrl-d:change-prompt(searching draft> )+reload(find draft -type f)' \
+		--bind 'ctrl-p:change-prompt(searching published> )+reload(find published -type f)' \
+		--bind 'ctrl-s:change-prompt(searching sent> )+reload(find sent -type f)' \
+		--preview-window=up,70%,wrap --preview='cat {}' 
+}
 
 ############################
 # CREATE
@@ -478,7 +595,7 @@ _create() {
 	_info "resume user email: ${_userEmail}"
 	read -rsn1 -p "$(_ask 'proceed? (y/n)')" _yn
 	echo
-	[[ "$_yn" != "y" ]] && { _error "aborting"; exit 1; }
+	[[ "$_yn" != "y" ]] && { _warn "explicit 'y' required; aborting"; return 1; }
 	[ ! -d "${_resumeDir}" ] && mkdir -p "${_resumeDir}"
 	git init -q -b main "${_resumeDir}"
 	git config --global includeif.gitdir:"${_resumeGitDisk}".path "${_resumeGitDisk}/.gitconfig"
@@ -486,11 +603,13 @@ _create() {
 	git config --file="${_resumeGitDisk}"/.gitconfig user.email "${_userEmail}"
 	touch ${_logFile}
 	echo "resume.log" > "${_resumeDir}/.gitignore"
+	echo "${_studioDirName}:resume" > ${_resumeGitDisk}/description
 	git -C "${_resumeDir}" --git-dir="${_resumeGitDisk}" add .gitignore
 	git -C "${_resumeDir}" --git-dir="${_resumeGitDisk}" commit -m "[genesis] created by ${_userName}"
 	mkdir "${_resumeDir}/draft"
 	mkdir "${_resumeDir}/sent"
 	mkdir "${_resumeDir}/published"
+	mkdir "${_resumeDir}/intent"
 }
 
 ###############
@@ -498,7 +617,7 @@ _create() {
 ###############
 
 _shell() {
-	# enter (cd) into studio environment
+	# enter (cd) into resume environment
 	# change the command history file
 	# change the prompt dynamically
 	cd "${_resumeDir}" || { _error "can not enter resume"; return 1; }
@@ -509,9 +628,26 @@ _shell() {
 	HISTCONTROL=ignoreboth
 	shopt -s histappend
 	set -o history
-	local _p
+	local _p				# prompt function for shell only
 	local _dirty
-	# confirm exit function
+	#
+	# set up local variables to reflect state
+	#
+	#_init() {
+	# init function; check how things were left last and act accordingly
+	#
+	# call:
+	# integrity function (focus on this app and its namespace)
+	# check the /intent...any cleanup necessary?
+	# check the git index
+	# check for dangling anything
+	#
+	# call:
+	# redundancy function (focus beyond the local files)
+	# check the status of data protection (dsink media and backups)
+	# check the status of remote mirrors (gitdisk)
+	#
+	# confirm exit function; what to check and cleanup on exit
 	_confirmExit() {
 		if _isIndexClean; then
 			exit
@@ -548,31 +684,35 @@ HEREDOC
 	}
 	# print usage
 	_printShellUsage() {
-		_printUsage
+		_printCommands
 	}
 	# main shell prompt function
 	_mainPrompt() {
 	#
 	# ignore ctrl+\ ctrl+z and ctrl+c
 	trap '' SIGQUIT SIGTSTP SIGINT SIGTERM
+	# call the init() function to check integrity
+	# init()
+	# set the prompt
 	_p() {
-		# sets the prompt
 		# colors cannot derive from tput here...as 'read -e' becomes confused
 		reset=$'\001\e[0m\002'
 		red=$'\001\e[00;31m\002'
 		yellow=$'\001\e[00;33m\002'
 		green=$'\001\e[00;32m\002'
-		_cH=$'\001\e[00;45m\002'
-		_cG=$'\001\e[00;7m\002'
-		_cU=$'\001\e[00;32m\002'
-		_cS=$'\001\e[00;33m\002'
+		_cH=$'\001\e[00;45m\002'		# white text, magenta bg
+		_cG=$'\001\e[00;7m\002'			# black text, while bg
+		_cU=$'\001\e[00;32m\002'		# green text, black bg
+		_cS=$'\001\e[00;33m\002'		# yellow text, black bg
+		_cB=$'\001\e[00;44m\002'		# white text, blue bg
+		# check the git index and intent buffer; set indicators accordingly
 		_index="${green}o${reset}"
 		_isIndexClean || _index="${red}x${reset}"
 		_buffer="${green}+${reset}"
 		_isBufferClean || _buffer="${red}-${reset}"
 		_headRev=$(git ${_git} rev-parse --short HEAD)
 		_u=$(git ${_git} config --get user.name)
-		echo -n "${_cH}${_studioDirName}${reset}:${_cG}${_resumeDirName}${reset} ${_cU}${_u}${reset} [${_cS}${_headRev}${reset}] ${_buffer}${_index} > "
+		echo -n "${_cH}${_studioDirName}${reset}:${_cB}${_resumeDirName}${reset} ${_cU}${_u}${reset} [${_cS}${_headRev}${reset}] ${_buffer}${_index} > "
 	}
 	local __input
 	while IFS='' read -r -d $'\n' -p "$(_p)" -e __input || true; do
@@ -588,7 +728,7 @@ HEREDOC
 		elif [[ "${__input}" =~ (^help$|^h$|^\?$) ]]; then
 			_printShellUsage
 		elif [[ "${__input}" =~ (^list$|^l$) ]]; then
-			_list || true
+			_picker || true
 		elif [[ "${__input}" =~ (^print$|^p$) ]]; then
 			_print
 		elif [[ "${__input}" =~ ^git ]]; then
@@ -598,7 +738,7 @@ HEREDOC
 		elif [[ "${__input}" =~ (^new$|^n$) ]]; then
 			eval "${self}" "${_originalParameters}" new || true
 		elif [[ "${__input}" =~ (^edit$|^e$) ]]; then
-			eval "${self}" "${_originalParameters}" edit || true
+			eval "${self}" "${_originalParameters}" new || true
 		else
 			eval "${self}" "${_originalParameters}" "${__input}" || :
 		fi
@@ -620,6 +760,7 @@ main() {
 	_setEnv
 	# reinitialize log functions after processing all command line options
 	_fLOG
+	_user=$(git ${_git} config --get user.name)
 	# validate the environment
 	# TODO figure out a better means of knowing
 	# 1. is this an interactive shell session
@@ -632,11 +773,7 @@ main() {
 	[[ -p /dev/stdout ]] && _debug 'STDOUT is attached to a pipe'
 	[[ ! -t 1 && ! -p /dev/stdout ]] && _debug 'STDOUT is attached to a redirection'
 	_isEnvSufficient || { _error "cannot run until these problems are resolved"; return 1; }
-	_isRepoCreated || { _error "resume repo has not been created; run create"; return; }
-	# set the global _user vars
-	#_userSet
-	# set up traps now	
-	#trap _irishExit EXIT
+	_doesDirExist || { _warn "repo must be created before use"; return;  }
 	# run germ shell if no arguments
 	[ -z "${_subCommand:-}" ] && _shell
 	# ctrl-d exits out of the last command...the trap set in the _shell catches
