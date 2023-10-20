@@ -11,7 +11,7 @@ _defaultPublishURL=jkl.bloom.us
 ###########################
 
 # required commands
-_requiredCommands=(git fzf make)
+_requiredCommands=(git fzf make aws pandoc batcat)
 
 # recommended commands
 _recommendedCommands=(git-sizer tig)
@@ -46,8 +46,6 @@ _fLOG
 _studioDirName=studio
 # resume lives inside studio
 _resumeDirName=resume
-# get the name of the script itself
-self=$(basename $0)
 
 # NAMESPACE
 # /_state/_key
@@ -91,10 +89,9 @@ _printCommands () {
 	cat << EOF
 
 commands:
- new                 create a new resume or cover letter
- edit                edit an existing resume or cover letter
- delete              remove a resume (from the working space)
+ new                 create or edit a resume (or cover letter)
  import              import an external document
+ delete              remove a resume (from the working space)
  publish             publish resume to ${_defaultPublishURL}
  list                browse documents
  inspect             run tig on the repo
@@ -111,6 +108,7 @@ including publishing it to a designated URL
 EOF
 }
 
+
 ####################################
 # PARAMETER PROCESSING FUNCTIONS
 ####################################
@@ -125,7 +123,7 @@ _getOpts () {
 		_debug "${FUNCNAME}: OPTIND=$OPTIND flag=$flag"
 		case ${flag} in 
 			h)
-				_printInfo ; _printUsage; exit 0
+				_printInfo ; _printUsage; _printCommands; exit 0
 				;;
      a)
         export _resumeDirName=$OPTARG
@@ -183,7 +181,7 @@ _getSubcommand() {
 				_getAddOpts
 				return
 				;;
-			edit)
+			import)
 				_debug "${FUNCNAME}: '$1' called, checking for $1 flags"
 				_subCommand=$1
 				return
@@ -210,7 +208,6 @@ _getSubcommand() {
 				return
 				;;
 			*)
-				#_error "${FUNCNAME}: '${1}' is not a subcommand"
 				_error "'${1}' is not a valid command"
 				return 1
 				;;
@@ -222,15 +219,25 @@ _getSubcommand() {
 _setEnv() {
 	# set (and print) the environment
 	#_info "setting up environment now"
+	# get the name etc
+	self=$(basename $0)
+	self_call="$0"
+	self_absolute=$(readlink -f $0)
+	self_pwd=$(pwd)
 	export _studioDir="$(dirname ~/.)/${_studioDirName}"
 	export _resumeDir="${_studioDir}/${_resumeDirName}"
 	export _resumeGitDisk="${_resumeDir}/.git"
 	export _logFile="${_resumeDir}/resume.log"
 	export _git="--git-dir=${_resumeGitDisk}"
 	export _gitWT="--git-dir=${_resumeGitDisk} --work-tree=${_resumeDir}"
+	###cd "${_resumeDir}" || { _error "can not enter resume"; return 1; }
+	# TODO need to fix this bullshit
 	[[ -f "${_logFile}" ]] && _canLog=true || _canLog=false
 	export _canLog
 	_debug "self=$self"
+	_debug "self_call=$self_call"
+	_debug "self_absolute=$self_absolute"
+	_debug "self_pwd=$self_pwd"
 	_debug "_studioDirName=$_studioDirName"
 	_debug "_studioDir=$_studioDir"
 	_debug "_resumeDirName=$_resumeDirName"
@@ -307,6 +314,7 @@ _doesDirExist() {
 # SUBCOMMAND OPTION PROCESSING
 #################################
 
+# this is a placeholder function which shows how to process add flags
 _getAddOpts() {
 	# check for _add() flags and args
 	local OPTIND=1
@@ -339,8 +347,6 @@ _inspect() {
 }
 
 _isIndexClean() {
-	# radical departure here...use intent/ as pre-commit working
-	# directory...make vim auto-save files there...etc
 	git ${_git} diff-index --quiet --cached main 2>&1 >/dev/null || return 1
 }
 
@@ -348,9 +354,6 @@ _isBufferClean() {
 	# checks for files left in intent/ (ie vim swp)
 	[[ -z "$(ls ${_resumeDir}/intent)" ]]
 }
-
-# _report()
-# print a human (or machine) readable health report
 
 # layers to check for consistency
 # vim auto-save files (needs vimrc to be integrated)
@@ -366,18 +369,6 @@ _isBufferClean() {
 # publish             publish resume to ${_defaultPublishURL}
 # list                browse documents
 # inspect             run tig on the repo
-
-# new
-# without args...
-# call picker to select name
-# existing name triggers choice
-#  edit existing or derive from selected
-# new name or derived name starts in intent
-# saved moves to draft
-# commit
-
-# edit
-# maybe can remove this...function is in new
 
 # delete
 # call picker to select
@@ -399,127 +390,276 @@ _isBufferClean() {
 # move key and html to published
 # commit
 
-# list
-# call picker to browse all
-
 ##################################
 # NEW, EDIT, and DERIVE
 ##################################
 
-# options
-# create a brand new resume (from scratch)
-# create a new resume (new name) derived from an existing one
-# edit an existing one
-
-# new flow
-# picker
-# if name is new, start from scratch
-# if name exists, _ask
-#   edit existing
-#   derive new from existing
-
-# editor vim swap files
-# to force swp into /intent
-# add the following to .vimrc
-# set directory^=${_resumeDir}/intent
-
 # TODO
 # path isn't correct when run as cli (shell otoh uses cwd)
 
+_validateName() {
+	# test the validity of the name...strict naming enforced
+	# because we expect to publish to a url for http, enforce naming here
+	# allowed characters
+	# a-z
+	# 0-9
+	# space and dash
+	# here we allow space, when put to html we convert space to dash
+	local _valid=true
+	local _lengthMax=40
+	# tests
+	# cannot be empty
+	test -z "${1}" && { _warn "empty name not allowed"; return 1; }
+	# first and last char must be lower or digit
+  [[ "${1}" =~ ^[[:digit:]|[:lower:]] ]] || \
+    { _warn "name '${1}' must begin with a letter or digit"; _valid=false; }
+  [[ "${1}" =~ [[:digit:]|[:lower:]]$ ]] || \
+    { _warn "name '${1}' must end with a letter or digit"; _valid=false; }
+	# no repeating spaces
+  [[ ! "${1}" =~ ([ ]){2} ]] || \
+    { _warn "space character mustn't repeat"; _valid=false; }
+	# length limit
+	[[ "${#1}" -le ${_lengthMax} ]] || \
+    { _warn "length (${#1}) exceeds length limit of ${_lenLimit}"; _valid=false; }
+	# lower, number, dash and spaces only
+	[[ "${1}" =~ ^([[:lower:]]|[[:digit:]]|[- ])*$ ]] || \
+		{ _warn "lower case, digits, dash and space characters only"; _valid=false; }
+	[[ $_valid = true ]] || return 1
+}
+
 _new() {
-	# create a new document
-	# select an existing to edit or derive
-	# or choose a new name to start from scratch
-	#local _user=${_user:=jkl}
-	local _role="resume"
-	local _key
-	local _newkey
-	local _seed
-	local _state=intent
-	#_key=$(_picker "specify the name")
-	_key=$(_picker)
-	_info "fzf exit status is $?"
-	_info "got key from fzf: '${_key}'"
-	# check the key name (coming back from fzf...unreliable)	
-	if [[ ${_key} == *"/"* ]]; then
-		# key is in state/key format
-		_info "${_key} found to include state"
-		_newkey=${_key#*/}
-		_state=${_key%/*}
-		_key=${_newkey}
-	else
-		_info "${_key} found to be solo"
-		# key is in key-only format (without state)
-		# should validate name here
-		:
-	fi
-	_info "key is ${_key}"
-	_info "state is ${_state}"
-	test -z ${_key} && { _warn "empty name not allowed"; return; }
-	if _doesKeyExist ${_key}; then
-		_state=$(_getKeyState ${_key})
-		_warn "${_key} exists in ${_state}"
-		read -rsn1 -p "$(_ask 'e for edit, n for new derivative')" _en
-		echo
-		if [[ ${_en} = "e" ]]; then
-			_info "edit existing"
-		elif [[ ${_en} = "n" ]]; then
-			# would be nice to pass new header to _picker
-			_seed=${_resumeDir}/${_state}/${_key}
-			_info "seed is ${_seed}"
-			_state=intent
-			_newkey=$(_picker choose-new)
-			# check the key name (coming back from fzf...depends)	
-			if [[ ${_newkey} == *"/"* ]]; then
-				# key is in state/key format
-				_newkey=${_newkey#*/}
-			else
-				# key is in key-only format (without state)
-				:
-			fi
-			_info "new name is ${_newkey}"
-			test -z ${_newkey} && { _warn "empty name not allowed"; return; }
-			[[ ${_newkey} = ${_key} ]] && { _warn "cannot use same name as original '${_key}'"; return; }
-			_key=${_newkey}
-			_info "key is ${_key}"
-		else
-			#_warn "no such command"
-			return
-		fi
-	else
-		_info "${_key} is new"
-		_state=intent
-	fi
-	_path="${_resumeDir}/${_state}/${_key}"
-	_info path:${_path}
-	_info seed:${_seed:-}
-	# need to seed the buffer if _seed is not empty
+	# run _picker to select the name
+	local _name				# name of the document to make or modify
+	local _state			# the subdirectory (or state) of _name
+	local _seed				# the source file for a DERIVE operation
+	local _newkey			# the new name for a DERIVE operation
+	local _path				# the full path to the file to be edited
+	_name=$(_picker "choose existing or new")
+	[[ -z ${_name} ]] && { _warn "no name selected"; return; }
+	_debug "got name from _picker: '${_name}'"
+	_validateName "${_name}" || { _error "name not allowed"; return 1; }
+	#
+  # DETERMINE OPERATION (NEW, EDIT, OR DERIVE)
+  #
+  if _doesKeyExist "${_name}"; then
+    # EDIT OR DERIVE
+    _state=$(_getKeyState "${_name}")
+    _info "'${_name}' exists in ${_state}"
+    read -rsn1 -p "$(_ask 'press "e" to edit, "n" to create a new derivative, q to abort')" _en
+    echo
+    if [[ ${_en} = "q" ]]; then
+      _warn "aborting operation"; return
+    elif [[ ${_en} = "e" ]]; then
+      _debug "edit existing"
+    elif [[ ${_en} = "n" ]]; then
+      _debug "edit derivative"
+      _seed="${_resumeDir}/${_state}/${_name}"
+      _state=intent
+      _newkey=$(_picker "choose a NEW name")
+			_validateName "${_newkey}" || { _error "name not allowed"; return 1; }
+      [[ ${_newkey} = ${_name} ]] && { _warn "cannot use same name as original '${_name}'"; return; }
+      _doesKeyExist "${_newkey}" && { _warn "name exists, cannot use existing name"; return; }
+      _name=${_newkey}
+    fi
+  else
+    # NEW
+    _debug "'${_name}' is new"
+    _state=intent
+  fi
+  _path="${_resumeDir}/${_state}/${_name}"
+  _info "name: '${_name}'"
+  _info "state: '${_state}'"
+  _info "path: '${_path}'"
+  _info "seed: '${_seed:-}'"
+	# make these available to other functions
+	export _name
+	export _state
+	export _path
+	export _seed
+	#
+  # SEED FILE (WHEN NECESSARY) AND EDIT
+  #
+  # need to seed the buffer if _seed is not empty
+  if [[ ! -z ${_seed:-} ]]; then
+    # seed the file into intent
+    _seedFile "${_seed}" "${_path}"
+  fi
+	#
+	# EDIT FILE
+	#
+	_edit
+	[[ ! -f "${_path}" ]] && { _warn "no file found at '${_path}'"; return; }
+	# depending on the return, either git commit or not
+	_checkChanges || { _warn "no changes detected"; return; }
+	_gitCommit || { _warn "git commit failed"; return; }
+}
+
+_gitCommit() {
+	# relies on _path, _name, _state
+  local _pathspec="${_state}/${_name}"
+  git -C "${_resumeDir}" --git-dir="${_resumeGitDisk}" add "${_pathspec}"
+  [[ $? != 0 ]] && { _warn "git add ${_pathspec} failed"; return 1; }
+  git -C "${_resumeDir}" --git-dir="${_resumeGitDisk}" commit -q -m "saved ${_name} as ${_state}"
+  [[ $? != 0 ]] && { _warn "git commit failed"; return 1; }
+	return 0
+}
+
+_checkChanges() {
+	# determine the operation and check if changes were made
+	# relies on _seed, _path, _name
+	# if no changes were made, return 1
+	# if changes were made, return 0
+	# CHANGE _key to _name
 	if [[ ! -z ${_seed:-} ]]; then
-		# seed the file into intent
-		_info "seeding ${_path} from ${_seed}"
-		cat ${_seed} > ${_path}
-		vim "+normal G$" "${_path}"
-		# compare the files...if same, then what?
-		# abort, or ask?
-		if cmp -s ${_seed} ${_path}; then
-			_info "${_path} is unchanged (derived from ${_seed}"
-			return
-		else
-			_info "${_path} is different than ${_seed}"
-		fi
-	else
-		# start something from scratch
-		vim "+normal G$" "${_path}"
-	fi
-	# need to allow abort...if vim does not save changes
-	local _draft="${_resumeDir}/draft/${_key}"
-	local _pathspec="draft/${_key}"
-	_info "moving ${_path} to ${_draft}"
-	mv "${_path}" "${_draft}"
-	git -C "${_resumeDir}" --git-dir="${_resumeGitDisk}" add "${_pathspec}"
-	[[ $? != 0 ]] && _warn "git add ${_pathspec} failed" || _info "git add success"
-	git -C "${_resumeDir}" --git-dir="${_resumeGitDisk}" commit -q -m "saved draft of ${_key}"
-	[[ $? != 0 ]] && _warn "git commit failed" || _info "git commit success"
+    _info "operation: DERIVE"
+    # _seed is not empty because we are doing a DERIVE operation
+    # compare _path with _seed to determine if changes were made
+    if cmp -s "${_seed}" "${_path}"; then
+      _warn "'${_path}' is unchanged"
+      rm "${_path}"
+      return 1
+    else
+      _info "'${_path}' has changed"
+    fi
+  elif [[ -z ${_seed:-} && ${_state} = "intent" ]]; then
+    _info "operation: NEW"
+		[[ ! -e "${_path}" ]] && { _warn "'${_path}' not found"; return 1; }
+    local _draft="${_resumeDir}/draft/${_name}"
+    _info "moving ${_path} to ${_draft}"
+    mv "${_path}" "${_draft}"
+    _state=draft
+  else
+    _info "operation: EDIT"
+    # _seed is empty because we are doing an EDIT operation
+    # compare _path with git to determine if changes were made if EDIT
+    _info "seed is '${_seed:-}' empty"
+    _info "path is '${_path}'"
+    _info "state is '${_state}'"
+    git -C "${_resumeDir}" --git-dir="${_resumeGitDisk}" diff --quiet "${_state}/${_name}"
+    _gitDiff=$?
+    _info "git diff returns '${_gitDiff}'"
+    [[ $_gitDiff = 0 ]] && { _warn "'${_state}/${_name}' is unchanged"; return 1; }
+    [[ $_gitDiff != 0 ]] && { _warn "'${_state}/${_name}' is changed"; }
+  fi
+  _info "state=${_state}"
+  _info "path=${_path}"
+  _info "seed=${_seed:-}"
+  _info "name=${_name}"
+}
+
+_picker() {
+	# used for name selection WITHIN repo (namespace control)
+	# optional arg 1 = instructions (put into fzf header}
+	local _scope			# the starting point for the search
+	local _dirList		# the list of subdirectories to search within
+	local _query			# the query string used in fzf
+	local _selection	# the selected string
+	local _name				# the name returned
+	export _guide="${1:-'select a name'}"
+	# maintain state
+	export _tmp="/tmp/studio.picker"
+	[[ -d ${_tmp} ]] || mkdir ${_tmp}
+	# help function
+	_showHelp() {
+		printf '
+-- name selector --
+
+press "/" to close this help screen
+ESC to abort
+TAB to fill the query with the selected value
+ENTER to accept the choice
+ENTER without a query term will use the selected value
+ENTER with a query term will use the query term'
+	}
+	export -f _showHelp
+	# preview the files
+	_preview() {
+		echo "viewing $1"
+		batcat -l md --style=plain --color always "$1"
+	}
+	export -f _preview
+	# populate the prompt string
+	_prompt() {
+		echo " > " 
+	}
+	export -f _prompt
+	# populate the header string
+	_header() {
+		echo "${_guide} (? for help, ESC to exit)"
+	}
+	export -f _header
+	# get the main list
+	_getView() {
+		find ${_stateList} -type f -not -path "*/.*" -not -path "*.log"
+	}
+	export -f _getView
+	# the main function
+	_fzfWrapper() {
+		local _query			# the query string typed
+		local _selection	# the selected item
+		local _lines			# number of lines fzf returned
+		trap "rm -rf ${_tmp}" EXIT
+		while true; do
+			_fzfReturn=$(fzf \
+				--no-mouse \
+				--no-multi \
+				--ansi \
+				--delimiter="/" \
+				--with-nth=3 \
+				--print-query \
+				--header 'Press ? for help, ESC to exit' \
+				--info=inline \
+				--preview='_preview {-2..}' \
+				--preview-window '60%,border-sharp' \
+				--bind "start:reload(_getView)+transform-prompt(_prompt)" \
+				--bind "start:+transform-header(_header)" \
+				--bind "tab:replace-query+first" \
+				--bind "?:change-preview(_showHelp)" \
+				--bind "/:change-preview(_preview {})" \
+			);
+			# if user aborted, break out of the loop
+			[[ ! ${_fzfReturn} ]] && break
+			# now look at what is returned
+			_lines=$(echo "${_fzfReturn}" | wc -l)
+			_query=$(echo "${_fzfReturn}" | head -n1)
+			_selection=$(echo "${_fzfReturn}" | tail -n1)
+			# strip everything but name
+			_selection=${_selection##*/}
+			# look for a query name without selection (new name without any match)
+			[[ ${_lines} == 1 ]] && { echo ${_query}; break; }
+			# multi-line return evaluation
+			# if query is empty then we only have selection
+			[[ -z ${_query} ]] && { echo ${_selection}; break; }
+			# if query and selection are the same, easy
+			[[ ${_query} == ${_selection} ]] && { echo ${_query}; break; } 
+			# if query and selection are not the same...use query
+			[[ ${_query} != ${_selection} ]] && { echo ${_query}; break; }
+			# the above creates the minor annoyance that one must use TAB to populate
+			# the query...acceptable because i don't know how else to determine
+		done
+	}
+	# run the main function
+	_fzfWrapper
+}
+
+_edit() {
+	# given path ($1), edit file, otherwise edit $_path
+	local _file=${1:-${_path}}
+	#vim -c 'set syntax=markdown' "${1}"
+	#nano --syntax=markdown "${1}"
+	nano --syntax=markdown "${_file}"
+}
+
+_seedFile() {
+	# given a path for the source ($1)
+	# and a name for the new ($2)
+	# seed the new file with the source
+	# return 0 if success, 1 if failed
+	_info "seeding from ${1}"
+	[[ -e "${2}" ]] && { _warn "'${2}' exists, cannot clobber"; return 1; }
+	cat "${1}" > "${2}"
+	[[ $? = 0 ]] && return
+	return 1
 }
 
 _doesKeyExist() {
@@ -528,7 +668,7 @@ _doesKeyExist() {
 	# return 0 if key exists
 	# return 1 if key does not exist
 	for i in ${_stateList[@]}; do
-		test -f ${_resumeDir}/$i/$1 && return 0
+		test -f "${_resumeDir}/$i/$1" && return 0
 	done
 	return 1
 }
@@ -538,30 +678,299 @@ _getKeyState() {
 	# arg 1 = key
 	local _state
 	for i in ${_stateList[@]}; do
-		if test -f ${_resumeDir}/$i/$1; then
+		if test -f "${_resumeDir}/$i/$1"; then
 			_state=$i
 		fi
 	done
 	echo ${_state}
 }
 
-_picker() {
-	# arg 1 optional: fzf header (instructions)
-	local _header="${1:-shift-tab: fill query with selected line\nctrl-i|d|p|s|a to view intent|draft|published|sent|all\n}"
-	#local _header="shift-tab: fill query with selected line\nctrl-i|d|p|s|a to view intent|draft|published|sent|all\n"
-	find ${_stateList} -type f | fzf \
+_fzfPicker() {
+	# attempt to normalize the _picker answer
+	# arg 1 = bottom line of header for specific instructions (optional)
+	local _instructions=${1:-undefined}
+	local _fzfResult
+	local _answer
+	# modify header 
+	_header=$'tab: fill with selected  enter: accept \nctrl-b|d|p|s|a to view intent|draft|published|sent|all \n'
+	[[ ! -z ${_instructions} ]] && _header=${_header}instructions:${_instructions}
+	_fzfResult=$(find ${_stateList} -type f | fzf \
 		--no-multi --no-mouse --print-query \
-		--prompt "searching all> " \
-		--header=$'tab: use selected\nctrl-b|d|p|s|a to view intent|draft|published|sent|all\n' \
-		--color=bg:#111111,preview-bg:#222222,prompt:yellow \
-		--bind 'tab:replace-query' \
-		--bind 'enter:print-query' \
+		--prompt 'searching all> ' \
+		--info=inline \
+		--header "$_header" \
+		--delimiter='/' --with-nth=2 \
+		--color 'bg:#111111,preview-bg:#222222,prompt:yellow' \
+		--bind 'tab:replace-query+first' \
 		--bind 'ctrl-a:change-prompt(searching all> )+reload(find intent draft published sent -type f)' \
 		--bind 'ctrl-b:change-prompt(searching intent> )+reload(find intent -type f)' \
 		--bind 'ctrl-d:change-prompt(searching draft> )+reload(find draft -type f)' \
 		--bind 'ctrl-p:change-prompt(searching published> )+reload(find published -type f)' \
 		--bind 'ctrl-s:change-prompt(searching sent> )+reload(find sent -type f)' \
-		--preview-window=up,70%,wrap --preview='cat {}' 
+		--preview-window 'up,70%,wrap' \
+		--preview 'batcat -l md --color always {}')
+	query=$(echo "${_fzfResult}" | head -n1)
+	selection=$(echo "${_fzfResult}" | tail -n1)
+	#_info "query is '${query}'"
+	#_info "selection is '${selection}'"
+	# if query is empty...use selected
+	[[ -z "${query}" ]] && { echo "${selection}"; return; }
+	# otherwise return the query
+	echo "${query}"
+	return
+	_info "fzf '${_fzfResult}'"
+	_lines=$(echo ${_fzfResult} | wc -l)
+	_warn ${_fzfResult}:${_lines}
+	echo ${_fzfResult}
+}
+	#	--bind 'enter:print-query' \
+
+############################
+# IMPORT
+############################
+
+_import() {
+	# calls _finder to identify file for import
+	local _importedFile
+	local _path
+	local _name
+	local _state
+	_importedFile=$(_finder)
+	[[ -f "${_importedFile}" ]] || { _warn "'${_importedFile}' is not a file"; return; } 
+	_info "imported file is ${_importedFile}"
+	_name=$(_picker "choose a new name")
+	_doesKeyExist "${_name}" && { _warn "'${_name}' already exists, new name required"; return; }
+	[[ -d "${_name}" ]] && { _warn "'${_name}' is a directory silly, no can do"; return; }
+	[[ -z "${_name}" ]] && { _warn "'${_name}' is empty...not allowed"; return; }
+	_info "name chosen is ${_name}"
+	export _path="${_resumeDir}/intent/${_name}"
+  _seedFile "${_importedFile}" "${_path}"
+	_edit
+	mv "${_resumeDir}/intent/${_name}" "${_resumeDir}/draft/${_name}"
+	export _state=draft
+	_gitCommit || { _warn "git commit failed"; return; }
+}
+
+_finder() {
+	# single file finder and selector
+	# uses fzf as the interface to find and select a file to import
+	# uses files in /tmp to maintain state
+	# state includes the CWD of the fzf subshell...thus we can maneuver
+	# returns the full path of the following variable (or 1 if none was selected)
+	local _selectedFile
+	# set the temp file dir
+	export _tmpDir="/tmp/studio.finder"
+	[[ -d ${_tmpDir} ]] || mkdir ${_tmpDir}
+	# help for _preview
+	_showHelp() {
+			printf '
++------------------------------------------------+
+| studio finder help  |  hit "/" to close help   |
++---------------------+--------------------------+
+
+options
+
+toggle hidden files and directories
+LEFT PANE: view files, directories, or both
+PREVIEW PANE: cycle preview for dirs
+ tree -L 1
+ tree -L 2
+ tree -L 3
+ tree
+ ls
+ ls -l
+
+arrows
+up/down             right/left
+lines
+lines
+ctrl-c: exit
+ctrl-a: toggle between "find ~" and "find /" (functional reset)
+ctrl-f: toggle between find dirs and find dirs+files
+ctrl-f: toggle between ignore hidden and include hidden' 
+	}
+	export -f _showHelp
+	# toggle option (simply touches or removes file of name given in arg 1)
+	_toggle() {
+		# pass the option name to the function
+		_opt=${1:-}
+		if [ -f ${_tmpDir}/${1} ]; then
+			rm -f ${_tmpDir}/${1} >/dev/null 2>&1
+		else
+			touch ${_tmpDir}/${1}
+		fi
+	}
+	export -f _toggle
+	_set() {
+		# set an option
+		# arg 1 = option name
+		# arg 2 = option value
+		echo "${2}" > "${_tmpDir}/${1}"
+	}
+	export -f _set
+	_get() {
+		# get value for option
+		[[ -f "${_tmpDir}/${1}" ]] || { echo err; return; }
+		cat "${_tmpDir}/${1}"
+	}
+	export -f _get
+	# populate fzf with a view (ie a list)
+	_getView() {
+		# populate the left pane with find results
+		# arg 1 (optional) sets the PATH for find
+		# other options are toggled in fzf and read in file
+		#
+		#local _findScope="find ~"
+		local _findScope
+		local _findDepth="-maxdepth 1"
+		local _findType="-type d"
+		local _findHide='-not -path "*/.*"'
+		local _cwd		# current working directory (stored in /tmp)
+		local _scope	# ctrl-a (toggle) between / and ~ changes view context and resets search
+		local _path		# the find search path
+		# first set the find search path (find where?)
+		# read the _cwd from tmp (this means we are in an active session)
+		[[ -f "${_tmpDir}/cwd" ]] && _cwd=$(cat "${_tmpDir}/cwd")
+		#
+		# set the find search path
+		# if no arg, finder is starting or reloading
+		if [[ -z ${1:-} ]]; then
+			# no arg passed
+			# check $_cwd
+			if [ -z "$_cwd" ]; then
+				# _cwd is not set, this is an initial view
+				_path="$HOME"
+			else
+				# _cwd is set and no arg...scope change
+				[ -f "${_tmpDir}/root" ] && _path="/"
+				[ ! -f "${_tmpDir}/root" ] && _path="$HOME"
+			fi
+		else
+			# arg passed
+			if [ -f "${1}" ]; then
+				# the selection is a file
+				touch "${_tmpDir}/_getView.expandfile"
+			elif [ -d "${1}" ] && [[ "${1}" = "${_cwd}" ]]; then
+				# $1 is the same as $_cwd and is a directory
+				# then it is a reload (or left arrow on a subdir)
+				_path="${1}"
+				touch "${_tmpDir}/_getView.reload"
+			else
+				# $1 is a directory and not _cwd
+				# it is a change context view
+				# set find scope
+				_path="${1}"
+				touch "${_tmpDir}/_getView.cd"
+				#
+			fi
+		fi
+		# set the find search path now
+		_findScope="find '${_path}'"
+		# update the state file for _cwd
+		echo "${_path}" > "${_tmpDir}/cwd"
+		# set the search depth (for deep vs surface search)
+		# toggle the dirs or dirs+files option
+		[ -f "${_tmpDir}/files" -a ! -f "{$_tmpDir}/nodirs" ] && _findType=""
+		# toggle hidden files (default: ignore hidden)
+		[ -f "${_tmpDir}/hidden" ] && _findHide=""
+		# print find command to tmp file for debugging
+		echo ${_findScope} ${_findDepth} ${_findType} ${_findHide} > "${_tmpDir}/_getView.find"
+		# assemble find command
+		eval ${_findScope} ${_findDepth} ${_findType} ${_findHide}
+	}
+	export -f _getView
+	_preview() {
+		# preview window of _finder produced by fzf
+		# context: file or dir (or help)
+		# default: tree -C
+		# options: hidden files or dirs
+		# 					files, dirs, or both
+		# 
+		local _viewMeans="echo"
+		local _viewFiles		# on or off
+		local _viewDirs			# on or off
+		if [[ -d "${1}" ]]; then
+			# viewing a directory
+			echo '$ tree -L 1 -C "$1"'
+			_cwd=$(cat "${_tmpDir}/cwd")
+			echo "cwd=${_cwd:-empty}"
+			[[ -f "${_tmpDir}/nofiles" ]] 
+			tree -L 1 -C "$1"
+		else
+			# viewing a file
+			#less -C "$1"
+			batcat --color always "${1}"
+		fi
+	}
+	export -f _preview
+	_prompt() {
+		# set the prompt string
+		# what is the scope
+		[[ -f "${_tmpDir}/root" ]] && _scope=/ || _scope="~"
+		# hidden or not
+		[[ -f "${_tmpDir}/hidden" ]] && _hidden=hide || _hidden=nohide
+		# files or no files
+		[[ -f "${_tmpDir}/files" ]] && _files=files || _files=nofiles
+		echo "$_scope $_hidden $_files > "
+	}
+	export -f _prompt
+	# main fzf wrapper
+	_fzfWrapper() {
+		# trap exit and clean up state (_tmpDir) every time
+		trap "rm -rf ${_tmpDir}" EXIT
+		# loop until fzf returns the selection
+		while true; do
+			_fzfReturn=$(fzf \
+				--no-multi \
+				--no-mouse \
+				--ansi \
+				--print-query \
+				--delimiter=/ \
+				--track \
+				--header='Press ? for help' \
+				--info=inline \
+				--preview='_preview {}' \
+				--preview-window '65%,border-sharp' \
+				--prompt '> ' \
+				--bind "ctrl-c:abort" \
+				--bind "ctrl-a:execute(_toggle root)+reload(_getView)+first" \
+				--bind "ctrl-a:+transform-prompt(_prompt)" \
+				--bind "ctrl-e:execute(_toggle nodirs)+reload(_getView {})+first" \
+				--bind "ctrl-f:execute(_toggle files)+reload(_getView {})+first" \
+				--bind "ctrl-f:+transform-prompt(_prompt)" \
+				--bind "ctrl-h:execute(_toggle hidden)+reload(_getView {})+first" \
+				--bind "ctrl-h:+transform-prompt(_prompt)" \
+				--bind "start:reload(_getView)" \
+				--bind "change:last" \
+				--bind "enter:accept-non-empty" \
+				--bind "?:change-preview(_showHelp | less)" \
+				--bind "/:change-preview(_preview {})" \
+				--bind "ctrl-o:execute(xmessage {..-2})" \
+				--bind "ctrl-l:execute(xmessage {q} {})" \
+				--bind "right:reload(_getView {})+first" \
+				--bind "left:reload(_getView {..-2})+first"
+			);
+		[[ ! ${_fzfReturn} ]] && break
+		query=$(echo "${_fzfReturn}" | head -n1)
+		selection=$(echo "${_fzfReturn}" | tail -n1)
+		echo "${selection}" && break
+	done
+	}
+	_fzfWrapper
+}
+
+############################
+# PUBLISH
+############################
+
+_publish () {
+	_name=${1:-jkl-resume}
+	_mdFile="${_resumeDir}/draft/${_name}"
+	[[ -e "${_mdFile}" ]] || { _warn "no file '${_mdFile}'"; return; }
+	pandoc "${_mdFile}" -f markdown -t html -V title:"" -s -o "/tmp/${_name}.html"
+	export AWS_PAGER=""
+	aws s3api put-object --bucket jkl.bloom.us --key jkl-resume.html --content-type text/html --body "/tmp/${_name}.html"
+	[[ $? == 0 ]] && _info "success" || _warn "failed to upload"
 }
 
 ############################
@@ -620,6 +1029,7 @@ _shell() {
 	# enter (cd) into resume environment
 	# change the command history file
 	# change the prompt dynamically
+	### this is a chicken egg problem...want to put this in _setEnv, but need to allow for the first start
 	cd "${_resumeDir}" || { _error "can not enter resume"; return 1; }
 	HISTFILE="${_studioDir}/.resume_history"
 	HISTSIZE=1000
@@ -729,14 +1139,31 @@ HEREDOC
 			_printShellUsage
 		elif [[ "${__input}" =~ (^list$|^l$) ]]; then
 			_picker || true
+		# testing new finder
+		elif [[ "${__input}" =~ (^f$) ]]; then
+			_finder
+		elif [[ "${__input}" =~ (^import$) ]]; then
+			_import
+		elif [[ "${__input}" =~ (^pub$) ]]; then
+			_publish
 		elif [[ "${__input}" =~ (^print$|^p$) ]]; then
 			_print
+		elif [[ "${__input}" =~ (^i$) ]]; then
+			_inspect
 		elif [[ "${__input}" =~ ^git ]]; then
 			# pass git commands back through epistle script
 			_gitCommand=(${__input})
 			git ${_gitWT} ${_gitCommand[@]:1} || :
 		elif [[ "${__input}" =~ (^new$|^n$) ]]; then
-			eval "${self}" "${_originalParameters}" new || true
+			# TODO this little bit is a problem and has caused me grief
+			# when invoked as './resume' the eval below uses the resume in the path
+			# which makes developing rather difficult, i think, and introduces
+			# terrible potential problems
+			# need to know how exactly the script has been called if we want to run
+			# the same script within this little "shell"
+			#eval "${self}" "${_originalParameters}" new || true
+			eval "${self_absolute}" "${_originalParameters}" new || true
+			# always use the original script that was executed!
 		elif [[ "${__input}" =~ (^edit$|^e$) ]]; then
 			eval "${self}" "${_originalParameters}" new || true
 		else
