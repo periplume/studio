@@ -246,10 +246,12 @@ _installFile() {
 			else
 				# file does not exist
 				cp "${1}" "${2}"
+				_info "installed ${2}"
 			fi
 		else
 			# force enabled
 			cp "${1}" "${2}"
+			_info "installed ${2}"
 		fi
 	fi
 }
