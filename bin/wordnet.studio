@@ -26,6 +26,7 @@ _cycleView() {
 	local _currentView
 	local _currentIndex
 	#echo "length of _allViews list: '${#_allViews[@]}'"
+	# we use a local hidden file to keep state...no other way sadly
 	if [[ -e .currentView ]]; then
 		_currentView=$(cat .currentView)
 		#echo "current view is already set: '${_currentView}'"
@@ -48,7 +49,6 @@ _cycleView() {
 			#echo "just increment by one"
 			((_adjustedIndex+1))
 			_currentView=${_allViews[${_adjustedIndex}]}
-			#_currentView=${_allViews[$((_adjustedIndex+1))]}
 			echo ${_currentView} > .currentView
 			#echo "current view set to ${_currentView}"
 		fi 
