@@ -1,0 +1,36 @@
+# <h1> tag
+## <h2>
+###### <h6>
+
+*italic* _italic_
+**bold** __bold__
+_combined to **emphasize** words_
+
+quote from
+
+> block quotes
+> block quotes
+
+
+lists (allowed tags are * + -)
+* first
+* second
+second more
+* third
+
+numbered lists
+1. first item
+2. second item
+3. third item
+
+horizontal rule
+- - -
+
+
+links
+[link name](http://link.com/link/location)
+
+
+
+further help
+https://daringfireball.net/projects/markdown/syntax

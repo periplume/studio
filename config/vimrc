@@ -1,0 +1,258 @@
+" studio specific
+
+" disable ex mode
+noremap Q <Nop>
+
+" set colors
+set t_Co=256
+" turn on color syntax highlighting
+syntax on
+" set the desired color scheme
+colorscheme desert
+
+" turn on visual bell (and audible bell off)
+set vb
+
+" keep the cursor centered in the screen
+set scrolloff=10
+
+" statusline
+set laststatus=2
+" print file name only without path
+"set statusline=%-100t
+set statusline=%-30t
+" display date in (approx) middle of status bar in format DD-Month-YYYY
+"set statusline+=\(%-{strftime(\"%d-%b-%Y\",getftime(expand(\"%:p\")))}\)
+set statusline+=%20{strftime('%d\ %b\ %Y')}
+" the above is wrong and displays the date of the last edit to the file
+" currently open...this needs to be fixed.
+" left/right separator
+set statusline+=%=
+" print current line and total lines
+set statusline+=Line:\ %-4l/%-4L
+" print word count from function below
+set statusline+=\ wc:%-6{WordCount()}
+" display timer derived from timer function below
+set statusline+=%{TimeSpentEditing()}
+
+" automatic backups go to intent/ directory
+set backup
+set backupdir=intent
+set writebackup
+set backupcopy=yes
+au BufWritePre * let &bex = '@' . strftime("%F.%H:%M")
+
+" detect *.md as markdown (not modula2!)
+autocmd BufNewFile,BufRead *.md set filetype=markdown
+
+" general editing mode
+set linebreak 
+set textwidth=80 
+set formatoptions=cq
+set wrap
+
+func! NoteMode()
+	" like write mode but without the forced auto wrapping
+	setlocal foldcolumn=12
+	setlocal linebreak
+	setlocal textwidth=80
+endfu
+com! NM call NoteMode()
+
+" for some reason this mode indents the line after a line that leads with a
+" number...not sure why (fixed: it was the n in formatoptions, which treats
+" numbers at the beginning of a line as numbered lists, and indents the line
+" after the number
+func! WriteMode()
+  setlocal formatoptions=want	"t=autowrap using textwidth; a=automatic formatting of paragraph
+  setlocal linebreak
+  setlocal textwidth=66		"sets wrap at <=80 characters
+  setlocal wrap			"wraps text automatically
+  setlocal foldcolumn=6	"add white space to left column (12 is the max)
+  setlocal autoindent
+endfu
+com! WM call WriteMode()
+
+" a function that tracks the word count (for the status bar)
+function! WordCount()
+  let s:old_status = v:statusmsg
+  let position = getpos(".")
+  exe ":silent normal g\<c-g>"
+  let stat = v:statusmsg
+  let s:word_count = 0
+  if stat != '--No lines in buffer--'
+    let s:word_count = str2nr(split(v:statusmsg)[11])
+    let v:statusmsg = s:old_status
+  end
+  call setpos('.', position)
+  return s:word_count 
+endfunction
+
+" now set it up to change the status line based on mode
+"if version >= 700
+"  au InsertEnter * hi StatusLine term=reverse ctermbg=5 gui=undercurl guisp=Magenta
+"  au InsertLeave * hi StatusLine term=reverse ctermfg=0 ctermbg=2 gui=bold,reverse
+"endif
+
+" want to add a timer to the status bar...time since file opened.
+" from 
+augroup TimeSpentEditing
+	au!
+	au BufWinEnter * if !exists('b:tstart')|let b:tstart=reltime()|en
+augroup END
+
+func! TimeSpentEditing()
+	let secs=str2nr(reltimestr(reltime(b:tstart)))
+	let hours=secs/3600
+	let minutes=(secs-hours*3600)/60
+	let seconds=secs-hours*3600-minutes*60
+	"return printf("%d:%02d",hours,minutes)
+	return printf("%d:%02d:%02d",hours,minutes,seconds)
+endfunc
+
+" function to open my custom markdown hint file in the bottom right column
+func! MarkdownGuide()
+	botright :60vsplit help/markdown.hints
+	setlocal statusline=%=\ markdown\ hints
+	wincmd h " return focus back to left
+endfu
+com! MDHINTS call MarkdownGuide()
+
+" function to open my vimhints file
+func! VimHints()
+	botright :60vsplit ~/.vim/vimhints.txt
+	setlocal statusline=%=\ vim\ hints
+	wincmd h  " return focus back to left window
+endfu
+com! VIMHINTS call VimHints()
+
+" funtion to open journal todo file
+func! JournalTodo()
+	highlight statuslineNC ctermbg=darkblue ctermfg=white
+	highlight statusline ctermbg=grey ctermfg=white
+	au InsertEnter * call InsertStatuslineColor(v:insertmode)
+	botright :82vsplit todo.txt
+	setlocal foldcolumn=1
+	setlocal statusline=%=\ todo
+	wincmd h  " return focus back to left window
+endfu
+com! JT call JournalTodo()
+
+" funtion to open the last journal entry
+func! JournalReadLast()
+	highlight statuslineNC ctermbg=blue ctermfg=white
+	highlight statusline ctermbg=grey ctermfg=white
+	botright :82vsplit last
+	setlocal foldcolumn=1
+	setlocal statusline=%=\ last
+	wincmd h
+endfu
+com! JLAST call JournalReadLast()
+
+
+" key mappings
+let mapleader = ','
+" insert mode maps
+" delete last word typed and append (this is what <c-w> does
+imap <c-d> <esc>diwA
+" reverse last two characters and return to end of line
+imap <c-r> <esc>XpA
+
+
+" map ",ev" to open vimrc in right panel
+nnoremap <leader>ev :botright :90vsplit $MYVIMRC<cr>
+
+nmap <leader>jt :JT<cr>
+nmap <leader>jc :wincmd l :wq<cr>
+
+" print the current working directory in the command field
+com! PWD :echo getcwd()
+
+" mode specific to journal
+" notice how it affects whether I stay in INSERT or return to NORMAL modes
+" (behavior)
+func! JournalMode()
+	highlight statuslineNC ctermbg=blue ctermfg=grey
+	highlight statusline ctermbg=darkgrey ctermfg=white
+	" set 'updatetime' to x minutes when in insert mode  (60000ms = 1m)
+	" default is 4 seconds (4000ms)
+	" this is ALSO how often the swap file is updated, which means
+	" jeopardizing more data loss by setting it to 4m
+	" only adjust the updatetime setting in INSERT mode
+	au InsertEnter * let updaterestore=&updatetime | set updatetime=240000  "4m
+	"au InsertEnter * let updaterestore=&updatetime | set updatetime=6000 "6s
+	au InsertLeave * let &updatetime=updaterestore
+	" change status line colors by mode
+	au InsertEnter * call InsertStatuslineColor(v:insertmode)
+	" return statusline to original
+	au InsertLeave * highlight statusline ctermbg=grey ctermfg=white
+	" exit insert mode when idle for x minutes
+	au CursorHoldI *  call AutoWriteQuit() " after updatetime expires write and quit...too long idle
+	" text wrapping etc from WM()
+  	setlocal formatoptions=at	"t=autowrap using textwidth; a=automatic formatting of paragraph
+  	setlocal linebreak
+  	setlocal textwidth=80		"sets wrap at <=80 characters
+  	setlocal wrap			"wraps text automatically
+	" create left margin with line numbers and white on white
+	setlocal numberwidth=10
+	setlocal number
+	" mask the line numbers for a left margin effect
+	highlight LineNr ctermfg=white ctermbg=white
+	" set up status line
+	setlocal statusline=\ journal\ 
+	"setlocal statusline+=%{ChangeStatuslineColor()}
+	" display date 
+	setlocal statusline+=%50{strftime('%d\ %b\ %Y')}
+	" now right, outside in
+	setlocal statusline+=%=
+	setlocal statusline+=\ wc:%-6{WordCount()}
+	setlocal statusline+=%{TimeSpentEditing()}
+	" key mappings
+	map = daw
+endfu
+com! Journal call JournalMode()
+
+
+function! AutoWriteQuit()
+	" write and quit
+	" leave a trace so journal script knows what happened
+	execute "!echo " strftime('%Y-%m-%d-%H:%M:%S') " > .vimAutoQuit.touch"
+	!fg
+	:wq
+endfu
+
+func! VimrcEditMode()
+	" special mode to experiment with vim when editing vimrc
+	" print file name only without path
+	set statusline=%-100t
+	setlocal statusline+=%50{strftime('%d\ %b\ %Y')}
+	" left/right separator
+	setlocal statusline+=%=
+	setlocal statusline+=\ mode:\ %4y
+	setlocal statusline+=\ Line:\ %-4l/%-4L
+	" display timer derived from timer function below
+	setlocal statusline+=%{TimeSpentEditing()}
+endfu
+com! VIMRC call VimrcEditMode()
+
+" simple statusline color changes by mode
+function! InsertStatuslineColor(mode)
+	if a:mode == 'i'
+		hi statusline ctermfg=white ctermbg=grey
+	elseif (a:mode =~# '\v(r|v|V)')
+		hi statusline ctermfg=white ctermbg=red
+	else
+		hi statusline ctermfg=white ctermbg=yellow
+	endif
+endfunction
+
+" change cursor by mode
+let &t_SI = "\e[6 q"
+let &t_EI = "\e[2 q"
+
+" kep mappings
+map = dd
+
+" autocorrect common typos
+iab teh the
+
