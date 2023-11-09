@@ -1,0 +1,53 @@
+to yank (copy) from the cursor to the end of the sentence
+y)
+
+to delete the same
+d)
+
+** modes **
+i for insert
+R for replace
+v for visual
+V for visual block
+ESC for normal
+
+:wqa  save and close all windows
+
+^ww   cycles windows clockwise
+^w-p  toggles between two windows
+^w-b  moves to bottom right
+^w-t  moves to top left
+
+        0   move to beginning of line
+        $   move to end of line
+   k    W   move forward one word
+  h l   B   move backward one word
+   j    )(  move by sentences
+        }{  move by paragraphs
+           HML move to top,middle,bottom of screen
+
+3yy   yanks 3 lines
+yas   yank sentence
+yap   yank paragraph
+
+das   delete sentence
+dd    delete line
+daw   delete word
+dap   delete paragraph
+
+c)    replace to end of sentence
+C     replace to end of line
+
+dwwP  swap current word with next
+
+check filetype
+: set filetype?
+
+re-wrap a paragraph
+gq}
+
+repeat last insert
+.
+
+view hidden characters
+set list

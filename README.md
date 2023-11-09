@@ -98,6 +98,7 @@ The various components in use include
 - rsync (backup and restore)
 - tig (git inspection tool)
 - vipe (special editing situations)
+- pandoc (publishing to, eg, html)
 
 # Installation
 
