@@ -3,7 +3,7 @@
 # source: https://github.com/periplume/studio.git
 # author: jason@bloom.us
 # SCRIPT AND SHELL SETTINGS
-set -o errexit  # set -e
+set -o errexit
 set -o nounset
 set -o pipefail
 
@@ -11,7 +11,11 @@ set -o pipefail
 # LIBRARY SOURCES
 ###########################
 
-source studio-lib.sh
+# source library commands
+# use the library file from the same directory if possible
+[[ -e "$(dirname $0)/studio-lib.sh" ]] \
+	&& source "$(dirname $0)/studio-lib.sh" \
+	|| source studio-lib.sh
 
 ###########################
 # LOGGING AND CONSOLE
@@ -24,9 +28,9 @@ _fLOG
 # BEHAVIOR
 
 # debugging and logging settings
-# script debug toggle (set to true to enable default global debugging)
-_DEBUG=false
-# silent mode for scripting (supresses all output)
+# debug toggle (set to true to enable default global debugging)
+_DEBUG=true
+# silent mode for scripting (supresses all output, and not fully implemented)
 _SILENT=false
 # logging facility
 _LOG=false
@@ -36,7 +40,7 @@ _LOG=false
 ###########################
  
 # required commands
-_requiredCommands=(git gitdisk dsink vipe fzf)
+_requiredCommands=(git gitdisk dsink vipe fzf tput)
 
 # recommended commands
 _recommendedCommands=(git-sizer tig)
@@ -45,15 +49,20 @@ _recommendedCommands=(git-sizer tig)
 # ENVIRONMENT SETTINGS
 ###########################
 
-# GLOBAL VARIABLES
-# these never change in the context of a session
-# these will be exported (in the case of fzf previews etc) 
-
 # WORKING ENVIRONMENT
-# _studioDirName is the working environment (typically in $HOME)
-_studioDirName=studio
-# get the name of the script itself
-self=$(basename $0)
+# the name of the working environment (ie directory)
+# modify with global -a flag
+_studioNAME=studio
+
+# the base working directory (default is $HOME)
+# modify with global -w flag
+_studioBASE="$HOME"
+
+# the working directory itself
+_studioHOME="${_studioBASE}/${_studioNAME}"
+
+# the development environment is kept separate (and optional)
+_studioLAB="$HOME/lab/${_studioNAME}"
 
 # USER NAME
 # the git username and email are used to create a short hash which identifies
@@ -70,36 +79,31 @@ _user=$(whoami)
 
 _printUsage () {
   cat << EOF
-
 usage: studio [OPTIONS] <command> [OPTIONS]
-${red}NEEDS FIXING${reset}
 
 options:
  -h      print this usage info
  -l      log commands and debug info to log file
  -d      print debug info to stdout and/or log
+ -D      run with bash 'set -x' globally
  -s      suppress all stdout/stderr
+ -x      start in OFFLINE mode
  -v      print version number and exit
 
 alternate env settings:
- -a <name>  set the germ dir name to <name>
- -w <name>  set the master studio dir to <name> (assumes \$HOME/<name>)
+ -a <name>  set the studio name to <name>
+ -w <path>  set the working dir to /<path>/<name>
+            default is \$HOME/<name>
 
 commands:
- add                 add a new germ entry to the database
- edit                edit an existing germ entry
- create              create a new germ git database
- inspect             run tig on the germ git bare repo
- sizer               run github sizer tool on germ git bare repo
-
+ none yet
 EOF
 }
 
 _printInfo () {
   cat << EOF
-
-studio needs explaining in a few words
-
+studio is an elaborate mess of scripts meant to present the semblance
+of a digital writer's studio.
 EOF
 }
 
@@ -111,24 +115,22 @@ _getOpts () {
 	# check for global command flags and set VARS accordingly
 	local OPTIND
 	# make the original environment available to _shell for calling back into main
-	export _originalParameters=${*}
+	#export _originalParameters=${*}
+	# getting rid of this...not needed
 	_debug "${FUNCNAME}: positional parameters read: $*"
-	while getopts ":hsdlva:w:" flag ; do
-		_debug "${FUNCNAME}: OPTIND=$OPTIND flag=$flag"
+	while getopts ":hsdlxva:w:" flag ; do
+		_debug "${FUNCNAME}: OPTIND=${OPTIND:-} flag=$flag OPTARG=${OPTARG:-}"
 		case ${flag} in 
 			h)
 				_printInfo ; _printUsage; exit 0
 				;;
 			a)
-				export _germDirName=$OPTARG
-				# TODO find a better way of avoiding using key words as OPTARGs
-				[[ $OPTARG =~ add|edit|create|print ]] && { _error "'$OPTARG' not allowed as name for -$flag"; exit 1; }
-				_debug "using alternative germ name '$_germDirName'"
+				_studioNAME=$OPTARG
+				_info "${FUNCNAME[0]} using alternative studio name '$OPTARG'"
 				;;
 			w)
-				export _studioDirName=$OPTARG
-				[[ $OPTARG =~ add|edit|create|print ]] && { _error "'$OPTARG' not allowed as name for -$flag"; exit 1; }
-				_debug "using alternative studio name '$_studioDirName'"
+				_studioBASE=$OPTARG
+				_info "${FUNCNAME[0]} using alternative base path '$OPTARG'"
 				;;
  	    s)
 				_debug "${FUNCNAME}: enabling silent mode with flag -$flag"
@@ -142,6 +144,10 @@ _getOpts () {
 				_debug "${FUNCNAME}: enabled log mode with flag -$flag"
 				export _LOG=true
 				;;
+			x)
+				_debug "${FUNCNAME[0]}: enabled OFFLINE mode with flag -$flag"
+				_studioONLINE=false
+				;;
 			v)
 				_info "${green}verion${reset}: beta"; exit 0
 				;;
@@ -151,12 +157,12 @@ _getOpts () {
 		esac
 	done
 	shift $((OPTIND - 1))
-	# export a paired down parameter string flags and args read within this
+	# export a paired down parameter string; flags and args read within this
 	# function will be discarded, leaving behind only that which the rest needs
 	export _workingParams=$*
-	_debug "${FUNCNAME}: _LOG=${_LOG}"
-	_debug "${FUNCNAME}: _SILENT=${_SILENT}"
-	_debug "${FUNCNAME}: _DEBUG=${_DEBUG}"
+	#_debug "${FUNCNAME}: _LOG=${_LOG}"
+	#_debug "${FUNCNAME}: _SILENT=${_SILENT}"
+	#_debug "${FUNCNAME}: _DEBUG=${_DEBUG}"
 	return
 }
 
@@ -171,7 +177,6 @@ _getSubcommand() {
 			status)
 				_debug "${FUNCNAME}: '$1' called, checking for $1 flags now"
 				_subCommand=$1
-				#_getStatusOpts
 				return
 				;;
 			test)
@@ -188,26 +193,87 @@ _getSubcommand() {
 }
 
 _setEnv() {
-	# set (and print) the environment
-	#_info "setting up environment now"
-	export _studioDir="$(dirname ~/.)/${_studioDirName}"
-	export _logFile="${_studioDir}/studio.log"
-	[[ -f "${_logFile}" ]] && _canLog=true || _canLog=false
-	export _canLog
-	_debug "self=$self"
-	_debug "_studioDirName=$_studioDirName"
-	_debug "_studioDir=$_studioDir"
-	_debug "_logFile=$_logFile"
-	_debug "_canLog=${_canLog:-false}"
-	_debug "_user=${_user:-unset}"
-	_debug "_DEBUG=$_DEBUG"
-	_debug "_SILENT=$_SILENT"
-	_debug "_LOG=$_LOG"
+  # set (and print) the environment details
+  _info "setting up environment now"
+  # determine stdin/stdout and terminal details
+  [[ -t 1 ]] && _debug 'STDOUT is attached to TTY'
+  [[ -t 0 ]] || _debug 'STDIN is attached to pipe'
+  [[ -p /dev/stdout ]] && _debug 'STDOUT is attached to a pipe'
+  [[ ! -t 1 && ! -p /dev/stdout ]] && _debug 'STDOUT is attached to a redirection'
+  _debug "terminal emulator is '$(_termDetect)'"
+  _debug "terminal (\$TERM) is '${TERM}'"
+  _debug "tty device is '$(tty)'"
+	_debug "terminal columns (\$tput cols)  are '$(tput cols)'"
+	_debug "terminal rows (\$tput lines) are '$(tput lines)'"
+	_debug "terminal colors total  (\$tput colors) '$(tput colors)'"
+	[[ ! $(tput colors) ]] || _superJob 1 loading...
+  _debug "shell (\$SHELL) is '${SHELL}'"
+	_debug "bash version (\$SHELL --version) is '$(${SHELL} --version | head -n1)'"
+	_debug "bash version (\$BASH_VERSION) is '$BASH_VERSION"
+  _debug "shell pid (\$\$) is '$$'"
+	_debug "shell option flags (\$-) are '$-'"
+	_debug "shell options (\$BASHOPTS): $BASHOPTS"
+	_debug "shell \$PATH is: $PATH"
+	_debug "shell user name is '$(whoami)'"
+	_debug "user and group info (\$id) is '$(id)'"
+  # get the name and absolute path of the calling script
+  script=$(basename "$0")
+  script_call="$0"
+  caller_pwd=$(pwd)
+  _selfABSOLUTE=$(readlink -f "$0")
+	_debug "${FUNCNAME[0]} script name (basename) is '$script'"
+	_debug "${FUNCNAME[0]} (\$0) is '$script_call'"
+  _debug "${FUNCNAME[0]} script absolute path: '${_selfABSOLUTE}'"
+	_debug "${FUNCNAME[0]} caller's current working dir (\$pwd) is '$caller_pwd'"
+	# determine the home
+	_studioHOME="${_studioBASE}/${_studioNAME}"
+  _debug "${FUNCNAME[0]} _studioNAME=${_studioNAME}"
+  _debug "${FUNCNAME[0]} _studioBASE=${_studioBASE}"
+  _debug "${FUNCNAME[0]} _studioHOME=${_studioHOME}"
+  _debug "${FUNCNAME[0]} _studioLAB=${_studioLAB}"
+  # set up git path and command
+	_studioGITDISK="${_studioHOME}/.git"
+	_studioGIT="git --git-dir=${_studioGITDISK}"
+  _debug "${FUNCNAME[0]} git version: '$(${_studioGIT} -v)'"
+  _debug "${FUNCNAME[0]} git disk: '${_studioGITDISK}'"
+  _debug "${FUNCNAME[0]} git command: '${_studioGIT}'"
+  # set up log details
+  _studioLOGFILE="${_studioHOME}/${_studioNAME}.log"
+  [[ -f "${_studioLOGFILE}" ]] && _studioLOGGING=true
+  _debug "${FUNCNAME[0]} ${_studioNAME} logfile: ${_studioLOGFILE}"
+  _debug "${FUNCNAME[0]} _canLog=${_studioLOGGING:-false}"
+  _debug "${FUNCNAME[0]} _DEBUG=${_DEBUG}"
+  _debug "${FUNCNAME[0]} _SILENT=${_SILENT}"
+  _debug "${FUNCNAME[0]} _LOG=${_LOG}"
+	# set up the user name (from git)
+  if [[ -f "${_studioGITDISK:-}/config" ]]; then
+    _studioUSER=$(git -C "${_studioGITDISK}" config --get user.name)
+  else
+		_studioUSER=$(git config --get user.name) || _studioUSER=$(whoami)
+  fi
+  _debug "${FUNCNAME[0]} user name: '${_studioUSER}'"
+	# test the network (unless explicitly OFFLINE with -x switch)
+	[[ ${_studioONLINE:-} != false ]] && _isOnline && _studioONLINE=true
+  _debug "${FUNCNAME[0]} online: ${_studioONLINE:-false}"
+	# export the important variables
+	export _selfABSOLUTE
+	export _studioNAME
+	export _studioBASE
+	export _studioHOME
+	export _studioLAB
+	export _studioGITDISK
+	export _studioGIT
+	export _studioLOGFILE
+	export _studioLOGGING
+	export _studioUSER
+	export _DEBUG
+	export _SILENT
+	export _LOG
+	export _studioONLINE
 }
 
 _isEnvSufficient() {
 	# check for required tools, report accordingly
-	# TODO add recommended checks with _missing{0:name,1:name}
 	local _sufficient=true
 	for _required in "${_requiredCommands[@]}"; do
 		if ! hash "${_required}" 2>/dev/null; then
@@ -217,49 +283,12 @@ _isEnvSufficient() {
 			_debug "${FUNCNAME}: ${_required} found"
 		fi
 	done
-	# check for germ dir (unless we are running create)
-	if [ ! -d "${_studioDir}" ]; then
-		if [ -z "${_subCommand:-}" ]; then
-			_error "found no ${_studioDir}; run a create function first?"
-		 	return 1
-		elif [ ! ${_subCommand:=} = "create" ]; then
-			_error "found no ${_studioDir}; run 'studio create' first??"
-			_sufficient=false
-		fi
-	fi
 	[ ${_sufficient} = true ] && return 0 || return 1
 }
 
 #################################
 # SUBCOMMAND OPTION PROCESSING
 #################################
-
-_getAddOpts() {
-	# check for _add() flags and args
-	local OPTIND=1
-	set -- ${_workingParams}
-	_debug "${FUNCNAME}: positional parameters read: $*"
-	shift
-	while getopts ":ib" flag "$@"; do
-		case ${flag} in
-			i)
-				# inline add (no editor invoked)
-				_debug "enabled inline mode"
-				_inline=true
-				;;
-			b)
-				# bulk add disables commit...this is a hack
-				_debug "bulk add operation"
-				_bulk=true
-				;;
-			?)
-				 _error "${FUNCNAME}: unknown flag -$OPTARG"; exit 1
-				;;
-		esac
-	done
-	shift $((OPTIND - 1))
-	export _workingParams=$*
-}
 
 _name() {
 	# the thing naming function
@@ -403,8 +432,8 @@ _shell() {
 	# enter (cd) into studio environment
 	# change the command history file
 	# change the prompt dynamically
-	cd "${_studioDir}" || { _error "can not enter studio"; return 1; }
-	HISTFILE="${_studioDir}/.studio_history"
+	cd "${_studioHOME}" || { _error "can not enter studio"; return 1; }
+	HISTFILE="${_studioHOME}/.studio_history"
 	HISTSIZE=1000
 	HISTFILESIZE=10000
 	HISTTIMEFORMAT="%s %F %T "
@@ -495,6 +524,7 @@ _shell() {
   ?    show help
   l    list studio contents
   w    wordnet lookup
+  j    johnson
   g    germ
   e    epistle
   r    resume
@@ -524,7 +554,7 @@ _shell() {
 		_cU=$'\001\e[00;32m\002'		#user
 		_cS=$'\001\e[00;33m\002'		#source
 		_data="$(_getRF-1)$(_getRF-2)$(_getRF-3)$(_getRF-4)$(_getRF-5)"
-		echo -n "${_cH}${_studioDirName}${reset}:${_cU}${_user}${reset} [${_data}:$(_getDsinkMedia)] > "
+		echo -n "${_cH}${_studioNAME}${reset}:${_cU}${_studioUSER}${reset} [${_data}:$(_getDsinkMedia)] > "
 	}
 	local __input
 	# simple one character interface
@@ -572,6 +602,9 @@ _shell() {
 				;;
 			w)
 				wordnet.studio || :
+				;;
+			j)
+				johnson || :
 				;;
 			$'\e')
 				# read escape keys
@@ -633,31 +666,30 @@ _shell() {
 }
 
 main() {
-	# what are we trying to do (read all the positional parameters and set VARS)
+	# read all the positional parameters
 	_getOpts "${@}"
 	_debug "${FUNCNAME}: parameters read: ${*}"
 	_debug "${FUNCNAME}: paired-down parameters: $_workingParams"
 	_getSubcommand $_workingParams
-	_debug "${FUNCNAME}: _subCommand: ${_subCommand:-}"
-	_debug "${FUNCNAME}: remaining args: $_workingParams"
+	#_debug "${FUNCNAME}: _subCommand: ${_subCommand:-}"
+	#_debug "${FUNCNAME}: remaining args: $_workingParams"
 	# setup the environment after processing all command line parameters
 	_setEnv
 	# reinitialize log functions after processing all command line options
 	_fLOG
 	# validate the environment
-	# TODO figure out a better means of knowing
-	# 1. is this an interactive shell session
-	# 2. is this part of a pipe
-	# 3. are we in our custom interactive shell (and does that matter?)
-	# set up logging and stdout stderr etc with traps
-	# possibly check for tty?
-	[[ -t 1 ]] && _debug 'STDOUT is attached to TTY'
-	[[ -t 0 ]] || _debug 'STDIN is attached to pipe'
-	[[ -p /dev/stdout ]] && _debug 'STDOUT is attached to a pipe'
-	[[ ! -t 1 && ! -p /dev/stdout ]] && _debug 'STDOUT is attached to a redirection'
 	_isEnvSufficient || { _error "cannot run until these problems are resolved"; return 1; }
 	# run shell if no arguments
 	[ -z "${_subCommand:-}" ] && _shell
 	_warn "${_subCommand} called, but that function doesn't exist"
 }
-main "${@}"
+# don't run if sourced
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  main "${@}"
+  if [ $? -gt 0 ]; then
+    exit 1
+  fi
+else
+	echo "'$script' cannot be sourced."
+	exit 1
+fi
