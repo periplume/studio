@@ -29,7 +29,7 @@ _fLOG
 
 # debugging and logging settings
 # debug toggle (set to true to enable default global debugging)
-_DEBUG=true
+_DEBUG=false
 # silent mode for scripting (supresses all output, and not fully implemented)
 _SILENT=false
 # logging facility
@@ -137,8 +137,12 @@ _getOpts () {
  	      export _SILENT=true
 				;;
 			d)
+				_DEBUG=true
 				_debug "${FUNCNAME}: enabled debug mode with flag -$flag"
-				export _DEBUG=true
+				;;
+			D)
+				set -x
+				_debug "${FUNCNAME[0]} enabled bash debugger (set -x) with flag -$flag"
 				;;
 			l)
 				_debug "${FUNCNAME}: enabled log mode with flag -$flag"
@@ -160,9 +164,9 @@ _getOpts () {
 	# export a paired down parameter string; flags and args read within this
 	# function will be discarded, leaving behind only that which the rest needs
 	export _workingParams=$*
-	#_debug "${FUNCNAME}: _LOG=${_LOG}"
-	#_debug "${FUNCNAME}: _SILENT=${_SILENT}"
-	#_debug "${FUNCNAME}: _DEBUG=${_DEBUG}"
+	_debug "${FUNCNAME[0]} _LOG=${_LOG}"
+	_debug "${FUNCNAME[0]} _SILENT=${_SILENT}"
+	_debug "${FUNCNAME[0]} _DEBUG=${_DEBUG}"
 	return
 }
 
