@@ -2,9 +2,10 @@
 # file: studio.install
 # source: https://github.com/periplume/studio.git
 # author: jason@bloom.us
+# desc: installer script for studio suite
 
 # SCRIPT AND SHELL SETTINGS
-set -o errexit  # set -e
+set -o errexit
 set -o nounset
 set -o pipefail
 
@@ -30,7 +31,10 @@ selfName=$(basename $0)
 selfPath=$(readlink -f "${0}")
 selfDir=$(dirname "${selfPath}")
 
-# OUTPUT
+###########################
+# DISPLAY
+###########################
+
 # some color
 red=$(tput setaf 1)
 boldred=$(tput setab 1 ; tput setaf 7)
@@ -40,7 +44,8 @@ yellow=$(tput setaf 3)
 label=$(tput setab 7; tput setaf 0)
 prompt=$(tput setab 5; tput setaf 7)
 reset=$(tput sgr0)
-# these are the same as the _fLOG library functions...just hand coded here
+# these are the same as the _fLOG library functions...just hand coded here to
+# maintain an uniform look and feel
 _ask() {
 	local _cAsk=$(tput setaf 0; tput setab 11)
 	printf '%s %s' "${_cAsk}USER${reset}" "${@}"
@@ -63,7 +68,7 @@ _debug() {
 }
 
 ####################################
-# HELPER FUNCTIONS
+# HELP FUNCTIONS
 ####################################
 
 _printUsage () {
@@ -72,13 +77,18 @@ _printUsage () {
 description: installs studio binary files from a local
 git repo into the user's HOME/bin directory
 
-usage: studio-install <command>
+usage: studio.install <command>
+
+options:
+ -h       print help
 
 commands:
  install                install studio binaries
  install -d             do not ask for alternative locations
  install -s <file>      specify only one studio file
- install -f             replaces existing files (after one confirmation)
+ install -f             replaces existing files (without confirmation!)
+ install -c             install bundled config files
+ install -h             install bundled hint files
 
 EOF
 }
@@ -90,9 +100,7 @@ EOF
 _getOpts () {
 	# check for global command flags and set VARS accordingly
 	local OPTIND
-	# make the original environment available to _shell for calling back into main
-	export _originalParameters=${*}
-	while getopts ":hsdlva:w:" flag ; do
+	while getopts ":h" flag ; do
 		case ${flag} in 
 			h)
 				_printUsage; exit 0
@@ -103,7 +111,7 @@ _getOpts () {
 		esac
 	done
 	shift $((OPTIND - 1))
-	# export a paired down parameter string flags and args read within this
+	# export a paired down parameter string; flags and args read within this
 	# function will be discarded, leaving behind only that which the rest needs
 	export _workingParams=$*
 	return
@@ -119,11 +127,6 @@ _getSubcommand() {
 			install)
 				_subCommand=$1
 				_getInstallOpts
-				return
-				;;
-			upgrade)
-				_subCommand=$1
-				_getUpgradeOpts
 				return
 				;;
 			*)
@@ -150,7 +153,7 @@ _getInstallOpts() {
 	local OPTIND=1
 	set -- ${_workingParams}
 	shift
-	while getopts ":fds:" flag "$@"; do
+	while getopts ":fdhcs:" flag "$@"; do
 		case ${flag} in
 			d)
 				# force...ie skip the alt names inquiries
@@ -163,6 +166,14 @@ _getInstallOpts() {
 			f)
 				# force...ie replace what's there...always dangerous
 				_forceInstall=true
+				;;
+			c)
+				# install config files
+				_configInstall=true
+				;;
+			h)
+				# install hint files
+				_hintInstall=true
 				;;
 			?)
 				 echo "${FUNCNAME}: unknown flag -$OPTARG"; exit 1
@@ -204,9 +215,9 @@ _install() {
 	if [[ -z "${_forceInstall:-}" ]]; then
 		_info "performing ${green}safe${reset} install"
 	else
-		_ask "force install requested, type capital ${boldred}F${reset} to proceed"
-		read -rsn1 _force
-		[[ ! "${_force}" = "F" ]] && { echo; _error "confirmation required"; exit 1; } || echo
+		#_ask "force install requested, type capital ${boldred}F${reset} to proceed"
+		#read -rsn1 _force
+		#[[ ! "${_force}" = "F" ]] && { echo; _error "confirmation required"; exit 1; } || echo
 		_warn "performing ${red}unsafe${reset} force install"
 	fi
 	[[ -d "${_home}" ]] || { _error "'${_home}' does not exist"; exit 1; }
@@ -222,6 +233,22 @@ _install() {
 		# doing just one file
 		_installFile "${_localRepo}/bin/${_specificFile}" "${_installDir}/${_specificFile}"
 	fi
+	# now check for _configInstall=true
+	if [[ ${_configInstall:-} = "true" ]]; then
+		[[ -d "${_studioDir}/.config" ]] || mkdir "${_studioDir}/.config"
+		for _configFile in $(ls "${_localRepo}/config"); do
+			_installFile "${_localRepo}/config/${_configFile}" "${_studioDir}/.config/${_configFile}"
+		done
+	fi
+	# now check for _hintInstall=true
+	if [[ ${_hintInstall:-} = "true" ]]; then
+		[[ -d "${_studioDir}/.hints" ]] || mkdir "${_studioDir}/.hints"
+		for _hintFile in $(ls "${_localRepo}/hints"); do
+			_installFile "${_localRepo}/hints/${_hintFile}" "${_studioDir}/.hints/${_hintFile}"
+		done
+	fi
+	# now check for the correct PATH
+	_checkPath
 }
 
 # copy wrapper with safeguards
@@ -255,6 +282,33 @@ _installFile() {
 		fi
 	fi
 }
+
+_checkPath() {
+	# check for $HOME/bin in $PATH
+	# if exists, return 0
+	# if missing, ask to modify (or print instructions)
+	local _homebin="$HOME/bin"
+	IFS=':' read -ra path_list <<< "$PATH"
+	found=false
+	for p in "${path_list[@]}"; do
+		if [ "$p" == "${_homebin}" ]; then
+			found=true
+			break
+		fi
+	done
+	if [ "$found" == false ]; then
+		_ask "add \$HOME/bin to the \$PATH? [y/n] "
+		read -rsn1 _ans; echo
+		if [[ ${_ans} = "y" ]]; then
+			echo 'export PATH=$PATH:'"$_homebin" >> ~/.bashrc
+			_info "added $HOME/bin to the .bashrc PATH"
+			_warn "restart the shell or source .bashrc for it to take effect"
+		else
+			_warn "add $HOME/bin to your PATH"
+		fi
+	fi
+}
+				
 
 main() {
 	# what are we trying to do (read all the positional parameters and set VARS)
