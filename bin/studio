@@ -431,6 +431,7 @@ __search() {
 ###############
 
 _shell() {
+	[ "${_DEBUG}" = false ] && clear
 	# enter (cd) into studio environment
 	# change the command history file
 	# change the prompt dynamically
