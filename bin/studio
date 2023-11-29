@@ -286,6 +286,8 @@ _isEnvSufficient() {
 	[ ${_sufficient} = true ] && return 0 || return 1
 }
 
+
+
 #################################
 # SUBCOMMAND OPTION PROCESSING
 #################################
@@ -665,11 +667,19 @@ _shell() {
 	_mainPrompt
 }
 
+_checkHome() {
+	if [ -d "${_studioHOME}" ]; then
+		_info "${_studioNAME} home found"
+	else
+		mkdir "${_studioHOME}"
+	fi
+}
+
 main() {
 	# read all the positional parameters
 	_getOpts "${@}"
-	_debug "${FUNCNAME}: parameters read: ${*}"
-	_debug "${FUNCNAME}: paired-down parameters: $_workingParams"
+	#_debug "${FUNCNAME}: parameters read: ${*}"
+	#_debug "${FUNCNAME}: paired-down parameters: $_workingParams"
 	_getSubcommand $_workingParams
 	#_debug "${FUNCNAME}: _subCommand: ${_subCommand:-}"
 	#_debug "${FUNCNAME}: remaining args: $_workingParams"
@@ -679,6 +689,8 @@ main() {
 	_fLOG
 	# validate the environment
 	_isEnvSufficient || { _error "cannot run until these problems are resolved"; return 1; }
+	# check the working directory
+	_checkHome
 	# run shell if no arguments
 	[ -z "${_subCommand:-}" ] && _shell
 	_warn "${_subCommand} called, but that function doesn't exist"
