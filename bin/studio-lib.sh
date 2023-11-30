@@ -2,22 +2,12 @@
 # file: studio-lib.sh
 # source: https://github.com/periplume/studio.git
 # author: jason@bloom.us
-# desc: shell library functions
+# desc: studio shell library functions
 
 # SCRIPT AND SHELL SETTINGS
 set -o errexit
 set -o nounset
 set -o pipefail
-
-# BEHAVIOR
-# debugging and logging settings
-# script debug toggle (set to true to enable default global debugging)
-_DEBUG=false
-# silent mode for scripting (supresses all output)
-_SILENT=false
-# logging facility
-_LOG=false
-
 
 # OUTPUT
 
@@ -48,7 +38,7 @@ reset=$(tput sgr0)
 #
 #	always expect fresh new line
 # exception...after ask...in which case, take care of that immediately
-# suppress all if _SILENT=true
+# suppress all if _studioSILENT=true
 #
 # call as
 # _warn "message"
@@ -58,13 +48,13 @@ reset=$(tput sgr0)
 # and static features: (defaults and global variables)
 #
 # the three main determinants:
-# _SILENT= true | false
-# _LOG= true | false
-# _DEBUG= true | false
+# _studioSILENT= true | false
+# _studioLOG= true | false
+# _studioDEBUG= true | false
 #
 # subordinate dependencies:
-# _canLog= true | false
-# _logFile= "path to file"
+# _studioLOG= true | false
+# _studioLOGFILE= "path to file"
 # $(tput colors)
 
 _fLOG() {
@@ -81,8 +71,8 @@ _fLOG() {
 	local _log=0
 	local _console=0
 	local _color=0
-	[[ "$_SILENT" = "false" ]] && _console=1
-	[[ "$_LOG" = "true" && "${_canLog:-}" = "true" ]] && _log=1
+	[[ "$_studioSILENT" = "false" ]] && _console=1
+	[[ "$_studioLOG" = "true" && "${_studioLOGGING:-}" = "true" ]] && _log=1
 	[[ $(tput colors) ]] && _color=1
 	#
 	# set up colors	
@@ -96,14 +86,14 @@ _fLOG() {
 	# CONSOLE AND LOG
 	if [[ $_console = 1 && $_log = 1 ]]; then
 		_debug() {
-			[[ "$_DEBUG" = "false" ]] && return
+			[[ "$_studioDEBUG" = "false" ]] && return
 			local _timeStamp=$(date +%s.%N)
 			printf '%s %s\n' "${_cDebug}DEBUG${_cReset}" "${@}"
-			printf '%s %s %s\n' "$_timeStamp" "${self} ${_cDebug}DEBUG${_cReset}" "${@}" >>${_logFile}
+			printf '%s %s %s\n' "$_timeStamp" "${self} ${_cDebug}DEBUG${_cReset}" "${@}" >>${_studioLOGFILE}
 		}
 		_info() {
 			local _timeStamp=$(date +%s.%N)
-			printf '%s %s %s\n' "$_timeStamp" "${self} ${_cInfo}INFO${_cReset}" "${@}" >>${_logFile}
+			printf '%s %s %s\n' "$_timeStamp" "${self} ${_cInfo}INFO${_cReset}" "${@}" >>${_studioLOGFILE}
 			# hack: below prints _info...multi-line messages are indented
 			SAVEIFS=$IFS
 			IFS=$'\n'
@@ -122,48 +112,48 @@ _fLOG() {
 		_warn() {
 			local _timeStamp=$(date +%s.%N)
 			printf '%s %s\n' "${_cWarn}WARN${_cReset}" "${@}"
-			printf '%s %s %s\n' "$_timeStamp" "${self} ${_cWarn}WARN${_cReset}" "${@}" >>${_logFile}
+			printf '%s %s %s\n' "$_timeStamp" "${self} ${_cWarn}WARN${_cReset}" "${@}" >>${_studioLOGFILE}
 		}
 		_error() {
 			local _timeStamp=$(date +%s.%N)
 			printf '%s %s\n' "${_cError}ERROR${_cReset}" "${@}"
-			printf '%s %s %s\n' "$_timeStamp" "${self} ${_cError}ERROR${_cReset}" "${@}" >>${_logFile}
+			printf '%s %s %s\n' "$_timeStamp" "${self} ${_cError}ERROR${_cReset}" "${@}" >>${_studioLOGFILE}
 		}
 		_ask() {
 			local _timeStamp=$(date +%s.%N)
 			printf '%s %s' "${_cAsk}USER${_cReset}" "${@}"
-			#printf '%s %s %s\n' "$_timeStamp" "${self} ${_cAsk}USER${_cReset}" "${@}" >>${_logFile}
+			#printf '%s %s %s\n' "$_timeStamp" "${self} ${_cAsk}USER${_cReset}" "${@}" >>${_studioLOGFILE}
 			# don't log prompts...if something is important, log as debug
 		}
 	# LOG ONLY
 	elif [[ $_console = 0 && $_log = 1 ]]; then
 		_debug() {
-			[[ "$_DEBUG" = "false" ]] && return
+			[[ "$_studioDEBUG" = "false" ]] && return
 			local _timeStamp=$(date +%s.%N)
-			printf '%s %s %s\n' "$_timeStamp" "${self} ${_cDebug}DEBUG${_cReset}" "${@}" >>${_logFile}
+			printf '%s %s %s\n' "$_timeStamp" "${self} ${_cDebug}DEBUG${_cReset}" "${@}" >>${_studioLOGFILE}
 		}
 		_info() {
 			local _timeStamp=$(date +%s.%N)
-			printf '%s %s %s\n' "$_timeStamp" "${self} ${_cInfo}INFO${_cReset}" "${@}" >>${_logFile}
+			printf '%s %s %s\n' "$_timeStamp" "${self} ${_cInfo}INFO${_cReset}" "${@}" >>${_studioLOGFILE}
 		}
 		_warn() {
 			local _timeStamp=$(date +%s.%N)
-			printf '%s %s %s\n' "$_timeStamp" "${self} ${_cWarn}WARN${_cReset}" "${@}" >>${_logFile}
+			printf '%s %s %s\n' "$_timeStamp" "${self} ${_cWarn}WARN${_cReset}" "${@}" >>${_studioLOGFILE}
 		}
 		_error() {
 			local _timeStamp=$(date +%s.%N)
-			printf '%s %s %s\n' "$_timeStamp" "${self} ${_cError}ERROR${_cReset}" "${@}" >>${_logFile}
+			printf '%s %s %s\n' "$_timeStamp" "${self} ${_cError}ERROR${_cReset}" "${@}" >>${_studioLOGFILE}
 		}
 		_ask() {
 			:
 			#local _timeStamp=$(date +%s.%N)
-			#printf '%s %s %s\n' "$_timeStamp" "${self} ${_cAsk}USER${_cReset}" "${@}" >>${_logFile}
+			#printf '%s %s %s\n' "$_timeStamp" "${self} ${_cAsk}USER${_cReset}" "${@}" >>${_studioLOGFILE}
 			# don't log _ask prompts
 		}
 	# CONSOLE ONLY
 	elif [[ $_console = 1 && $_log = 0 ]]; then
 		_debug() {
-			[[ "$_DEBUG" = "false" ]] && return
+			[[ "$_studioDEBUG" = "false" ]] && return
 			printf '%s %s\n' "${_cDebug}DEBUG${_cReset}" "${@}"
 		}
 		_info() {

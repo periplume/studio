@@ -24,16 +24,14 @@ set -o pipefail
 _fLOG
 # the log/console functions instantited now will be re-initialized after all the
 # command line parameters are processed, ie modified by flags
-
-# BEHAVIOR
-
+# see the _fLOG function in studio-lib.sh for details
 # debugging and logging settings
 # debug toggle (set to true to enable default global debugging)
-_DEBUG=false
+_studioDEBUG=false
 # silent mode for scripting (supresses all output, and not fully implemented)
-_SILENT=false
+_studioSILENT=false
 # logging facility
-_LOG=false
+_studioLOG=false
 
 ###########################
 # PREREQUISITES
@@ -85,7 +83,7 @@ options:
  -h      print this usage info
  -l      log commands and debug info to log file
  -d      print debug info to stdout and/or log
- -D      run with bash 'set -x' globally
+ -D      run with bash 'set -x'
  -s      suppress all stdout/stderr
  -x      start in OFFLINE mode
  -v      print version number and exit
@@ -118,7 +116,7 @@ _getOpts () {
 	#export _originalParameters=${*}
 	# getting rid of this...not needed
 	_debug "${FUNCNAME}: positional parameters read: $*"
-	while getopts ":hsdlxva:w:" flag ; do
+	while getopts ":hsdDlxva:w:" flag ; do
 		_debug "${FUNCNAME}: OPTIND=${OPTIND:-} flag=$flag OPTARG=${OPTARG:-}"
 		case ${flag} in 
 			h)
@@ -134,10 +132,10 @@ _getOpts () {
 				;;
  	    s)
 				_debug "${FUNCNAME}: enabling silent mode with flag -$flag"
- 	      export _SILENT=true
+				_studioSILENT=true
 				;;
 			d)
-				_DEBUG=true
+				_studioDEBUG=true
 				_debug "${FUNCNAME}: enabled debug mode with flag -$flag"
 				;;
 			D)
@@ -146,7 +144,7 @@ _getOpts () {
 				;;
 			l)
 				_debug "${FUNCNAME}: enabled log mode with flag -$flag"
-				export _LOG=true
+				_studioLOG=true
 				;;
 			x)
 				_debug "${FUNCNAME[0]}: enabled OFFLINE mode with flag -$flag"
@@ -164,9 +162,9 @@ _getOpts () {
 	# export a paired down parameter string; flags and args read within this
 	# function will be discarded, leaving behind only that which the rest needs
 	export _workingParams=$*
-	_debug "${FUNCNAME[0]} _LOG=${_LOG}"
-	_debug "${FUNCNAME[0]} _SILENT=${_SILENT}"
-	_debug "${FUNCNAME[0]} _DEBUG=${_DEBUG}"
+	_debug "${FUNCNAME[0]} _studioLOG=${_studioLOG}"
+	_debug "${FUNCNAME[0]} _studioSILENT=${_studioSILENT}"
+	_debug "${FUNCNAME[0]} _studioDEBUG=${_studioDEBUG}"
 	return
 }
 
@@ -245,10 +243,10 @@ _setEnv() {
   _studioLOGFILE="${_studioHOME}/${_studioNAME}.log"
   [[ -f "${_studioLOGFILE}" ]] && _studioLOGGING=true
   _debug "${FUNCNAME[0]} ${_studioNAME} logfile: ${_studioLOGFILE}"
-  _debug "${FUNCNAME[0]} _canLog=${_studioLOGGING:-false}"
-  _debug "${FUNCNAME[0]} _DEBUG=${_DEBUG}"
-  _debug "${FUNCNAME[0]} _SILENT=${_SILENT}"
-  _debug "${FUNCNAME[0]} _LOG=${_LOG}"
+  _debug "${FUNCNAME[0]} _studioLOGGING=${_studioLOGGING:-false}"
+  _debug "${FUNCNAME[0]} _studioDEBUG=${_studioDEBUG}"
+  _debug "${FUNCNAME[0]} _studioSILENT=${_studioSILENT}"
+  _debug "${FUNCNAME[0]} _studioLOG=${_studioLOG}"
 	# set up the user name (from git)
   if [[ -f "${_studioGITDISK:-}/config" ]]; then
     _studioUSER=$(git -C "${_studioGITDISK}" config --get user.name)
@@ -270,9 +268,9 @@ _setEnv() {
 	export _studioLOGFILE
 	export _studioLOGGING
 	export _studioUSER
-	export _DEBUG
-	export _SILENT
-	export _LOG
+	export _studioDEBUG
+	export _studioSILENT
+	export _studioLOG
 	export _studioONLINE
 }
 
@@ -435,7 +433,7 @@ __search() {
 ###############
 
 _shell() {
-	[ "${_DEBUG}" = false ] && clear
+	[ "${_studioDEBUG}" = false ] && clear
 	# enter (cd) into studio environment
 	# change the command history file
 	# change the prompt dynamically
@@ -529,6 +527,7 @@ _shell() {
 	_printShellUsage() {
 		echo -ne "
   ?    show help
+  0    print _studio ENV
   l    list studio contents
   w    wordnet lookup
   j    johnson
@@ -573,6 +572,9 @@ _shell() {
 				;;
 			h|\?)
 				_printShellUsage
+				;;
+			0)
+				printenv | grep "^_studio"
 				;;
 			q)
 				exit
