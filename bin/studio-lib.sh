@@ -71,8 +71,8 @@ _fLOG() {
 	local _log=0
 	local _console=0
 	local _color=0
-	[[ "$_studioSILENT" = "false" ]] && _console=1
-	[[ "$_studioLOG" = "true" && "${_studioLOGGING:-}" = "true" ]] && _log=1
+	[[ "${_studioSILENT:-}" = "false" ]] && _console=1
+	[[ "${_studioLOG:-}" = "true" && "${_studioLOGGING:-}" = "true" ]] && _log=1
 	[[ $(tput colors) ]] && _color=1
 	#
 	# set up colors	
